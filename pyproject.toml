@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[project]
+name = "bachelorsproject"
+version = "0.0.1"
+description = "Comparing transformer architecture against current deep neural networks for continous knee angle prediction using a single IMU"
+authors = [
+  { name = "Joel Boer" },
+]
+
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    
+]
+requires-python = "~=3.12.0"
+
+
+[tool.ruff]
+line-length = 99
+src = ["bachelorsproject"]
+include = ["pyproject.toml", "bachelorsproject/**/*.py"]
+
+[tool.ruff.lint]
+extend-select = ["I"]  # Add import sorting
+
+[tool.ruff.lint.isort]
+known-first-party = ["bachelorsproject"]
+force-sort-within-sections = true
+
