@@ -4,3 +4,19 @@ dataset:
   output_zip: "data/raw/ENABL3S.zip"
   extract_dir: "data/raw/ENABL3S"
   processed_dir: "data/processed/ENABL3S"
+
+training:
+  active_model: "timesfm"
+  epochs: 50
+  batch_size: 16
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  split_ratio: 0.9  # 90/10 train/val split
+  context_length: 512
+  forecast_horizon: 64
+
+models:
+  chronos2:
+    model_id: "amazon/chronos-t5-small"
+  timesfm:
+    model_id: "google/timesfm-2.5-200m-transformers"
