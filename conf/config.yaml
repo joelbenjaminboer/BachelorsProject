@@ -8,11 +8,11 @@ dataset:
 training:
   active_model: "timesfm"
   epochs: 50
-  batch_size: 1
+  batch_size: 128
   learning_rate: 1.0e-4
   weight_decay: 1.0e-5
   split_ratio: 0.9  # 90/10 train/val split
-  context_length: 512
+  context_length: 25
   forecast_horizon: 10
 
 models:
