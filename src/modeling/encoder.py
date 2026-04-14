@@ -13,7 +13,6 @@ class IMU_Intent_Encoder(nn.Module):
         
         # Setup the Transformer Encoder layers
         # batch_first=True makes our shapes (Batch, Seq, Features)
-        
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=num_heads, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         

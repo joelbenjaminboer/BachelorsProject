@@ -144,6 +144,15 @@ def main(cfg: DictConfig):
         if len(val_loader) > 0:
             val_loss /= len(val_loader)
         logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+        
+        #save model checkpoint if weights are improving
+        if epoch == 0 or val_loss < best_val_loss:
+            best_val_loss = val_loss
+            checkpoint_path = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", f"best_model_epoch_{epoch+1}.pth")
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+            torch.save(model.state_dict(), checkpoint_path)
+            logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
+        
 
 if __name__ == "__main__":
     main()
