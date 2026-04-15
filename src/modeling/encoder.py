@@ -2,11 +2,10 @@ import torch
 import torch.nn as nn
 
 class IMU_Intent_Encoder(nn.Module):
-    def __init__(self, input_features=6, seq_length=125, d_model=64, num_heads=4, num_layers=3, forecast_steps=50):
+    def __init__(self, input_features=6, seq_length=125, d_model=64, num_heads=4, num_layers=3, dim_feedforward=128):
         super(IMU_Intent_Encoder, self).__init__()
         # Project the 6 IMU features into a larger dimension
         self.input_projection = nn.Linear(input_features, d_model)
-        
         
         # Positional encoding layer
         self.positional_layer = PositionalEncoding(d_model=d_model, max_len=seq_length)
@@ -16,20 +15,26 @@ class IMU_Intent_Encoder(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model,
                                                    nhead=num_heads,
                                                    batch_first=True,
-                                                   dim_feedforward=128)
+                                                   dim_feedforward=dim_feedforward)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # The Regression Head
-        # After flattening, the shape will be (Batch, seq_length * d_model)
-        self.flatten = nn.Flatten()
-        self.regression_head = nn.Linear(seq_length * d_model, forecast_steps)
+        # Pretraining: Mask Token and Reconstruction Head
+        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.reconstruction_head = nn.Linear(d_model, input_features)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         # x shape: (Batch, 125, 6)
         
         # Project: (Batch, 125, 6) -> (Batch, 125, 64)
         x = self.input_projection(x)
         
+        # Apply Masking
+        if mask is not None:
+            # mask shape: (Batch, 125)
+            # Expand mask token to the masked positions
+            bool_mask = mask.unsqueeze(-1).bool()
+            x = torch.where(bool_mask, self.mask_token, x)
+            
         # Add positional encoding: (Batch, 125, 64) -> (Batch, 125, 64)
         x = self.positional_layer(x)
         
@@ -37,13 +42,9 @@ class IMU_Intent_Encoder(nn.Module):
         # Output shape is still (Batch, 125, 64)
         encoded_x = self.transformer_encoder(x)
         
-        # Flatten all 125 time steps into one long vector per batch
-        # Shape: (Batch, 125 * 64) -> (Batch, 8000)
-        flat_x = self.flatten(encoded_x)
-        
-        # Predict the next 50 ms of knee angles
-        # Shape: (Batch, 8000) -> (Batch, 50)
-        predictions = self.regression_head(flat_x)
+        # Reconstruct the original 6 IMU features
+        # Shape: (Batch, 125, 64) -> (Batch, 125, 6)
+        predictions = self.reconstruction_head(encoded_x)
         
         return predictions
     
