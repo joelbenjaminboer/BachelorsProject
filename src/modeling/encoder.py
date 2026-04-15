@@ -13,7 +13,10 @@ class IMU_Intent_Encoder(nn.Module):
         
         # Setup the Transformer Encoder layers
         # batch_first=True makes our shapes (Batch, Seq, Features)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=num_heads, batch_first=True)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model,
+                                                   nhead=num_heads,
+                                                   batch_first=True,
+                                                   dim_feedforward=128)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
         # The Regression Head
@@ -27,9 +30,9 @@ class IMU_Intent_Encoder(nn.Module):
         # Project: (Batch, 125, 6) -> (Batch, 125, 64)
         x = self.input_projection(x)
         
-        # Add Positional Encoding here (skipping the math for brevity, 
-        # but you would add a positional matrix to x here)
+        # Add positional encoding: (Batch, 125, 64) -> (Batch, 125, 64)
         x = self.positional_layer(x)
+        
         # Pass through the Encoder
         # Output shape is still (Batch, 125, 64)
         encoded_x = self.transformer_encoder(x)
