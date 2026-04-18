@@ -19,7 +19,7 @@ else:
 
 
 class Trainer:
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, pretrained_state_dict=None):
         self.cfg = cfg
         self.device = device
 
@@ -57,9 +57,22 @@ class Trainer:
 
         logger.info("Initializing IMU_Intent_Encoder from encoder.py")
         self.model = IMU_Intent_Encoder(
-            input_features=6, seq_length=self.seq_length, forecast_steps=self.forecast_horizon
+            input_features=6,
+            seq_length=self.seq_length,
+            forecast_horizon=self.forecast_horizon,
         )
         self.model.to(self.device)
+
+        if pretrained_state_dict is not None:
+            incompatible = self.model.load_state_dict(pretrained_state_dict, strict=False)
+            if incompatible.missing_keys or incompatible.unexpected_keys:
+                logger.warning(
+                    "Loaded pretrained weights with missing keys: {} and unexpected keys: {}",
+                    incompatible.missing_keys,
+                    incompatible.unexpected_keys,
+                )
+            else:
+                logger.info("Loaded pretrained weights successfully.")
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -80,7 +93,7 @@ class Trainer:
                 future_knee = batch["future_knee"].to(self.device)
 
                 self.optimizer.zero_grad()
-                predictions = self.model(past_imu)
+                predictions = self.model(past_imu, task="predict")
                 loss = self.criterion(predictions, future_knee)
                 loss.backward()
                 self.optimizer.step()
@@ -92,13 +105,11 @@ class Trainer:
             self.model.eval()
             val_loss = 0.0
             with torch.no_grad():
-                for batch in tqdm(
-                    self.val_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Val]"
-                ):
+                for batch in tqdm(self.val_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Val]"):
                     past_imu = batch["past_imu"].to(self.device)
                     future_knee = batch["future_knee"].to(self.device)
 
-                    predictions = self.model(past_imu)
+                    predictions = self.model(past_imu, task="predict")
                     loss = self.criterion(predictions, future_knee)
                     val_loss += loss.item()
 
@@ -121,8 +132,8 @@ class Trainer:
                 logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
 
 
-def run_train(cfg: DictConfig):
-    trainer = Trainer(cfg)
+def run_train(cfg: DictConfig, pretrained_state_dict=None):
+    trainer = Trainer(cfg, pretrained_state_dict=pretrained_state_dict)
     trainer.run()
 
 

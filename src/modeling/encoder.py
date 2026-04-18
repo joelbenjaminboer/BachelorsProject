@@ -7,6 +7,7 @@ class IMU_Intent_Encoder(nn.Module):
         self,
         input_features=6,
         seq_length=125,
+        forecast_horizon=50,
         d_model=64,
         num_heads=4,
         num_layers=3,
@@ -30,7 +31,10 @@ class IMU_Intent_Encoder(nn.Module):
         self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
         self.reconstruction_head = nn.Linear(d_model, input_features)
 
-    def forward(self, x, mask=None):
+        # Downstream prediction: Regression Head
+        self.regression_head = nn.Linear(d_model, forecast_horizon)
+
+    def forward(self, x, mask=None, task="reconstruct"):
         # x shape: (Batch, 125, 6)
 
         # Project: (Batch, 125, 6) -> (Batch, 125, 64)
@@ -50,11 +54,15 @@ class IMU_Intent_Encoder(nn.Module):
         # Output shape is still (Batch, 125, 64)
         encoded_x = self.transformer_encoder(x)
 
-        # Reconstruct the original 6 IMU features
-        # Shape: (Batch, 125, 64) -> (Batch, 125, 6)
-        predictions = self.reconstruction_head(encoded_x)
+        if task == "reconstruct":
+            # Shape: (Batch, 125, 64) -> (Batch, 125, 6)
+            return self.reconstruction_head(encoded_x)
+        if task == "predict":
+            # Pooling: Take the representation of the last time step
+            pooled = encoded_x[:, -1, :]  # Shape: (Batch, 64)
+            return self.regression_head(pooled)
 
-        return predictions
+        raise ValueError(f"Unknown task: {task}")
 
 
 class PositionalEncoding(nn.Module):

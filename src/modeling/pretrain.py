@@ -61,7 +61,7 @@ def evaluate_masked_reconstruction(
             batch_size_current = past_imu.size(0)
             mask = torch.rand(batch_size_current, seq_length, device=device) < mask_ratio
 
-            reconstructed_imu = model(past_imu, mask=mask)
+            reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
             loss = criterion(reconstructed_imu[mask], past_imu[mask])
 
             batch_sq_error_sum, batch_masked_count = masked_channel_sse(
@@ -141,7 +141,8 @@ class Pretrainer:
 
         self.model = IMU_Intent_Encoder(
             input_features=6,
-            seq_length=125,
+            seq_length=self.seq_length,
+            forecast_horizon=self.forecast_horizon,
             d_model=64,
             num_heads=4,
             num_layers=3,
@@ -155,6 +156,7 @@ class Pretrainer:
 
         self.mask_ratio = cfg.training.get("mask_ratio", 0.2)
         self.best_val_loss = float("inf")
+        self.best_checkpoint_path = None
 
     def run(self):
         logger.info(f"Starting MAE Pretraining with mask ratio {self.mask_ratio * 100}%")
@@ -165,16 +167,17 @@ class Pretrainer:
             train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=self.device)
             train_masked_count = 0
 
-            for batch in tqdm(
-                self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]"
-            ):
+            for batch in tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]"):
                 past_imu = batch["past_imu"].to(self.device)
                 batch_size_current = past_imu.size(0)
-                mask = torch.rand(batch_size_current, self.seq_length, device=self.device) < self.mask_ratio
+                mask = (
+                    torch.rand(batch_size_current, self.seq_length, device=self.device)
+                    < self.mask_ratio
+                )
 
                 self.optimizer.zero_grad()
 
-                reconstructed_imu = self.model(past_imu, mask=mask)
+                reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
                 loss = self.criterion(reconstructed_imu[mask], past_imu[mask])
 
                 batch_sq_error_sum, batch_masked_count = masked_channel_sse(
@@ -232,21 +235,21 @@ class Pretrainer:
 
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
-                save_dir = os.path.join(
-                    hydra.utils.get_original_cwd(), "checkpoints", "pretrain"
-                )
+                save_dir = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", "pretrain")
                 os.makedirs(save_dir, exist_ok=True)
-                checkpoint_path = os.path.join(
-                    save_dir, f"best_pretrained_epoch_{epoch + 1}.pth"
-                )
+                checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
 
                 torch.save(self.model.state_dict(), checkpoint_path)
                 logger.info(f"Saved new best pretrained checkpoint to {checkpoint_path}")
 
+                self.best_checkpoint_path = checkpoint_path
+
+        return self.best_checkpoint_path
+
 
 def run_pretrain(cfg: DictConfig):
     trainer = Pretrainer(cfg)
-    trainer.run()
+    return trainer.run()
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
