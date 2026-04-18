@@ -71,6 +71,5 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x):
-        # x shape: (Batch, Seq_len, d_model)
         x = x + self.pe[:, : x.size(1), :]
         return x
