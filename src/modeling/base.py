@@ -2,10 +2,12 @@ import torch
 import torch.nn as nn
 from typing import Any, Dict
 
+
 class BaseForecaster(nn.Module):
     """
     Base class for all forecasting models to ensure a unified API.
     """
+
     def __init__(self):
         super().__init__()
 

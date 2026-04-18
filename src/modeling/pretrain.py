@@ -32,9 +32,7 @@ def masked_channel_sse(predictions: torch.Tensor, targets: torch.Tensor, mask: t
 
 
 def format_channel_metrics(channel_names, values):
-    return " | ".join(
-        f"{channel}={value:.4f}" for channel, value in zip(channel_names, values)
-    )
+    return " | ".join(f"{channel}={value:.4f}" for channel, value in zip(channel_names, values))
 
 
 def evaluate_masked_reconstruction(
@@ -57,7 +55,7 @@ def evaluate_masked_reconstruction(
     phase_masked_count = 0
 
     with torch.no_grad():
-        for batch in tqdm(data_loader, desc=f"Epoch {epoch+1}/{epochs} [{phase_label}]"):
+        for batch in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{epochs} [{phase_label}]"):
             past_imu = batch["past_imu"].to(device)
 
             batch_size_current = past_imu.size(0)
@@ -86,6 +84,7 @@ def evaluate_masked_reconstruction(
 
     return phase_loss, phase_channel_mse, phase_channel_rmse
 
+
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     logger.info(f"Using device: {device} for Pretraining")
@@ -102,7 +101,7 @@ def main(cfg: DictConfig):
     processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
 
     num_workers = min(os.cpu_count() or 1, 8)
-    train_loader, val_loader, test_loader, split_info = build_pretrain_dataloaders(
+    train_loader, val_loader, _, split_info = build_pretrain_dataloaders(
         data_dir=processed_dir,
         seq_length=seq_length,
         forecast_horizon=forecast_horizon,
@@ -110,18 +109,17 @@ def main(cfg: DictConfig):
         split_ratio=split_ratio,
         split_strategy=split_strategy,
         holdout_subjects=holdout_subjects,
+        include_test_loader=False,
         seed=split_seed,
         num_workers=num_workers,
     )
 
     logger.info(
         f"Split strategy: {split_info['split_strategy']} | "
-        f"holdout subjects: {', '.join(split_info['holdout_subjects']) or 'None'}"
+        f"held-out subjects: {', '.join(holdout_subjects) or 'None'}"
     )
     logger.info(
-        f"Samples - train: {split_info['train_samples']}, "
-        f"val: {split_info['val_samples']}, "
-        f"test: {split_info['test_samples']}"
+        f"Samples - train: {split_info['train_samples']}, val: {split_info['val_samples']}"
     )
     logger.info(
         f"Train subjects ({len(split_info['train_subjects'])}): "
@@ -131,20 +129,15 @@ def main(cfg: DictConfig):
         f"Val subjects ({len(split_info['val_subjects'])}): "
         f"{', '.join(split_info['val_subjects']) or 'None'}"
     )
-    logger.info(
-        f"Test subjects ({len(split_info['test_subjects'])}): "
-        f"{', '.join(split_info['test_subjects']) or 'None'}"
-    )
 
     # Initialize model
     model = IMU_Intent_Encoder(
-        input_features=6, 
-        seq_length=seq_length,
-        # Ensure these default match your config or `train.py` architecture overrides
-        d_model=64, 
-        num_heads=4, 
-        num_layers=3, 
-        dim_feedforward=128
+        input_features=6,
+        seq_length=125,
+        d_model=64,
+        num_heads=4,
+        num_layers=3,
+        dim_feedforward=128,
     ).to(device)
 
     # Setup Optimization
@@ -153,41 +146,43 @@ def main(cfg: DictConfig):
 
     # Pretraining specifics
     mask_ratio = cfg.training.get("mask_ratio", 0.2)  # Default 20% masking if not in config
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
 
-    logger.info(f"Starting MAE Pretraining with mask ratio {mask_ratio*100}%")
+    logger.info(f"Starting MAE Pretraining with mask ratio {mask_ratio * 100}%")
 
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
         train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
         train_masked_count = 0
-        
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]"):
+
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs} [Train]"):
             past_imu = batch["past_imu"].to(device)
             # past_imu shape: (Batch, seq_length, 6)
-            
+
             # Generate random mask based on mask_ratio
             batch_size_current = past_imu.size(0)
-            
+
             # Create boolean mask (True = Masked token)
             # Shape: (Batch, seq_length)
             mask = torch.rand(batch_size_current, seq_length, device=device) < mask_ratio
-            
+
             optimizer.zero_grad()
-            
+
             # Pass original data and mask to model
             reconstructed_imu = model(past_imu, mask=mask)
-            
-            # Calculate MSE only on the masked timesteps to force the model to infer them 
+
+            # Calculate MSE only on the masked timesteps to force the model to infer them
             # OR over all tokens. Standard MAE usually calculates loss only over masked patches.
             loss = criterion(reconstructed_imu[mask], past_imu[mask])
 
-            batch_sq_error_sum, batch_masked_count = masked_channel_sse(reconstructed_imu, past_imu, mask)
+            batch_sq_error_sum, batch_masked_count = masked_channel_sse(
+                reconstructed_imu, past_imu, mask
+            )
             if batch_sq_error_sum is not None:
                 train_sq_error_sum += batch_sq_error_sum
                 train_masked_count += batch_masked_count
-            
+
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -213,20 +208,9 @@ def main(cfg: DictConfig):
             phase_label="Val",
         )
 
-        test_loss, test_channel_mse, test_channel_rmse = evaluate_masked_reconstruction(
-            model=model,
-            data_loader=test_loader,
-            criterion=criterion,
-            seq_length=seq_length,
-            mask_ratio=mask_ratio,
-            epoch=epoch,
-            epochs=epochs,
-            phase_label="Test (Held-out)",
+        logger.info(
+            f"Epoch {epoch + 1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}"
         )
-            
-        logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
-        if test_loader is not None:
-            logger.info(f"Epoch {epoch+1}/{epochs} - Test Loss (Held-out): {test_loss:.4f}")
         logger.info(
             "Train Channel MSE - "
             f"{format_channel_metrics(CHANNEL_NAMES, train_channel_mse.tolist())}"
@@ -236,33 +220,24 @@ def main(cfg: DictConfig):
             f"{format_channel_metrics(CHANNEL_NAMES, train_channel_rmse.tolist())}"
         )
         logger.info(
-            "Val Channel MSE - "
-            f"{format_channel_metrics(CHANNEL_NAMES, val_channel_mse.tolist())}"
+            f"Val Channel MSE - {format_channel_metrics(CHANNEL_NAMES, val_channel_mse.tolist())}"
         )
         logger.info(
             "Val Channel RMSE - "
             f"{format_channel_metrics(CHANNEL_NAMES, val_channel_rmse.tolist())}"
         )
-        if test_loader is not None:
-            logger.info(
-                "Test Channel MSE (Held-out) - "
-                f"{format_channel_metrics(CHANNEL_NAMES, test_channel_mse.tolist())}"
-            )
-            logger.info(
-                "Test Channel RMSE (Held-out) - "
-                f"{format_channel_metrics(CHANNEL_NAMES, test_channel_rmse.tolist())}"
-            )
-        
+
         # Save model checkpoint
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             # Create a dedicated directory for pretrain checkpoints
             save_dir = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", "pretrain")
             os.makedirs(save_dir, exist_ok=True)
-            checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch+1}.pth")
-            
+            checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
+
             torch.save(model.state_dict(), checkpoint_path)
             logger.info(f"Saved new best pretrained checkpoint to {checkpoint_path}")
+
 
 if __name__ == "__main__":
     main()
