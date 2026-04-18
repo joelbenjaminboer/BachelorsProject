@@ -6,14 +6,17 @@ dataset:
   processed_dir: "data/processed/ENABL3S"
 
 training:
-  active_model: "timesfm"
   epochs: 50
   batch_size: 128
   learning_rate: 1.0e-4
   weight_decay: 1.0e-5
   split_ratio: 0.9  # 90/10 train/val split
+  split_strategy: "loso"
+  holdout_subjects: ["AB194"]
+  split_seed: 42
   context_length: 25
   forecast_horizon: 10
+  mask_ratio: 0.2
 
 models:
   chronos2:

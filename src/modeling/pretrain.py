@@ -5,10 +5,8 @@ import hydra
 from omegaconf import DictConfig
 from loguru import logger
 from tqdm import tqdm
-from torch.utils.data import DataLoader, random_split
 
-# Import the dataset and our new Masked Autoencoder from your existing setup
-from src.modeling.train import IMUKneeDataset
+from src.dataloader import build_pretrain_dataloaders
 from src.modeling.encoder import IMU_Intent_Encoder
 
 # Setup device correctly
@@ -19,6 +17,75 @@ elif torch.cuda.is_available():
 else:
     device = torch.device("cpu")
 
+CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
+
+
+def masked_channel_sse(predictions: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor):
+    masked_predictions = predictions[mask]
+    masked_targets = targets[mask]
+
+    if masked_predictions.numel() == 0:
+        return None, 0
+
+    squared_error = (masked_predictions - masked_targets).pow(2)
+    return squared_error.sum(dim=0), masked_predictions.size(0)
+
+
+def format_channel_metrics(channel_names, values):
+    return " | ".join(
+        f"{channel}={value:.4f}" for channel, value in zip(channel_names, values)
+    )
+
+
+def evaluate_masked_reconstruction(
+    model,
+    data_loader,
+    criterion,
+    seq_length,
+    mask_ratio,
+    epoch,
+    epochs,
+    phase_label,
+):
+    if data_loader is None or len(data_loader) == 0:
+        nan_metrics = torch.full((len(CHANNEL_NAMES),), float("nan"))
+        return float("nan"), nan_metrics, nan_metrics
+
+    model.eval()
+    phase_loss = 0.0
+    phase_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
+    phase_masked_count = 0
+
+    with torch.no_grad():
+        for batch in tqdm(data_loader, desc=f"Epoch {epoch+1}/{epochs} [{phase_label}]"):
+            past_imu = batch["past_imu"].to(device)
+
+            batch_size_current = past_imu.size(0)
+            mask = torch.rand(batch_size_current, seq_length, device=device) < mask_ratio
+
+            reconstructed_imu = model(past_imu, mask=mask)
+            loss = criterion(reconstructed_imu[mask], past_imu[mask])
+
+            batch_sq_error_sum, batch_masked_count = masked_channel_sse(
+                reconstructed_imu, past_imu, mask
+            )
+            if batch_sq_error_sum is not None:
+                phase_sq_error_sum += batch_sq_error_sum
+                phase_masked_count += batch_masked_count
+
+            phase_loss += loss.item()
+
+    phase_loss /= len(data_loader)
+
+    if phase_masked_count > 0:
+        phase_channel_mse = (phase_sq_error_sum / phase_masked_count).detach().cpu()
+        phase_channel_rmse = torch.sqrt(phase_channel_mse)
+    else:
+        phase_channel_mse = torch.full((len(CHANNEL_NAMES),), float("nan"))
+        phase_channel_rmse = torch.full((len(CHANNEL_NAMES),), float("nan"))
+
+    return phase_loss, phase_channel_mse, phase_channel_rmse
+
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     logger.info(f"Using device: {device} for Pretraining")
@@ -28,36 +95,45 @@ def main(cfg: DictConfig):
     batch_size = cfg.training.batch_size
     epochs = cfg.training.epochs
     learning_rate = cfg.training.learning_rate
+    split_ratio = cfg.training.get("split_ratio", 0.9)
+    split_strategy = cfg.training.get("split_strategy", "loso")
+    holdout_subjects = cfg.training.get("holdout_subjects", [])
+    split_seed = cfg.training.get("split_seed", 42)
     processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
 
-    # Note: We still load the same Dataset, but we only extract the IMU sequence (past_imu) 
-    # and ignore the forecasting (future_knee) target.
-    dataset = IMUKneeDataset(processed_dir, seq_length, forecast_horizon)
-
-    # Validation Split
-    split_ratio = cfg.training.get("split_ratio", 0.9)
-    train_size = int(split_ratio * len(dataset))
-    val_size = len(dataset) - train_size
-    
-    # Optional seed for reproducibility
-    generator = torch.Generator().manual_seed(42)
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=generator)
-
-    # Dataloaders
     num_workers = min(os.cpu_count() or 1, 8)
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        num_workers=num_workers, 
-        persistent_workers=(num_workers > 0)
+    train_loader, val_loader, test_loader, split_info = build_pretrain_dataloaders(
+        data_dir=processed_dir,
+        seq_length=seq_length,
+        forecast_horizon=forecast_horizon,
+        batch_size=batch_size,
+        split_ratio=split_ratio,
+        split_strategy=split_strategy,
+        holdout_subjects=holdout_subjects,
+        seed=split_seed,
+        num_workers=num_workers,
     )
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=batch_size, 
-        shuffle=False, 
-        num_workers=num_workers, 
-        persistent_workers=(num_workers > 0)
+
+    logger.info(
+        f"Split strategy: {split_info['split_strategy']} | "
+        f"holdout subjects: {', '.join(split_info['holdout_subjects']) or 'None'}"
+    )
+    logger.info(
+        f"Samples - train: {split_info['train_samples']}, "
+        f"val: {split_info['val_samples']}, "
+        f"test: {split_info['test_samples']}"
+    )
+    logger.info(
+        f"Train subjects ({len(split_info['train_subjects'])}): "
+        f"{', '.join(split_info['train_subjects']) or 'None'}"
+    )
+    logger.info(
+        f"Val subjects ({len(split_info['val_subjects'])}): "
+        f"{', '.join(split_info['val_subjects']) or 'None'}"
+    )
+    logger.info(
+        f"Test subjects ({len(split_info['test_subjects'])}): "
+        f"{', '.join(split_info['test_subjects']) or 'None'}"
     )
 
     # Initialize model
@@ -84,6 +160,8 @@ def main(cfg: DictConfig):
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
+        train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
+        train_masked_count = 0
         
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]"):
             past_imu = batch["past_imu"].to(device)
@@ -104,6 +182,11 @@ def main(cfg: DictConfig):
             # Calculate MSE only on the masked timesteps to force the model to infer them 
             # OR over all tokens. Standard MAE usually calculates loss only over masked patches.
             loss = criterion(reconstructed_imu[mask], past_imu[mask])
+
+            batch_sq_error_sum, batch_masked_count = masked_channel_sse(reconstructed_imu, past_imu, mask)
+            if batch_sq_error_sum is not None:
+                train_sq_error_sum += batch_sq_error_sum
+                train_masked_count += batch_masked_count
             
             loss.backward()
             optimizer.step()
@@ -112,25 +195,63 @@ def main(cfg: DictConfig):
         if len(train_loader) > 0:
             train_loss /= len(train_loader)
 
-        # Validation Step
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]"):
-                past_imu = batch["past_imu"].to(device)
-                
-                # Same masking strategy during validation
-                batch_size_current = past_imu.size(0)
-                mask = torch.rand(batch_size_current, seq_length, device=device) < mask_ratio
-                
-                reconstructed_imu = model(past_imu, mask=mask)
-                loss = criterion(reconstructed_imu[mask], past_imu[mask])
-                val_loss += loss.item()
+        if train_masked_count > 0:
+            train_channel_mse = (train_sq_error_sum / train_masked_count).detach().cpu()
+            train_channel_rmse = torch.sqrt(train_channel_mse)
+        else:
+            train_channel_mse = torch.full((len(CHANNEL_NAMES),), float("nan"))
+            train_channel_rmse = torch.full((len(CHANNEL_NAMES),), float("nan"))
 
-        if len(val_loader) > 0:
-            val_loss /= len(val_loader)
+        val_loss, val_channel_mse, val_channel_rmse = evaluate_masked_reconstruction(
+            model=model,
+            data_loader=val_loader,
+            criterion=criterion,
+            seq_length=seq_length,
+            mask_ratio=mask_ratio,
+            epoch=epoch,
+            epochs=epochs,
+            phase_label="Val",
+        )
+
+        test_loss, test_channel_mse, test_channel_rmse = evaluate_masked_reconstruction(
+            model=model,
+            data_loader=test_loader,
+            criterion=criterion,
+            seq_length=seq_length,
+            mask_ratio=mask_ratio,
+            epoch=epoch,
+            epochs=epochs,
+            phase_label="Test (Held-out)",
+        )
             
         logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+        if test_loader is not None:
+            logger.info(f"Epoch {epoch+1}/{epochs} - Test Loss (Held-out): {test_loss:.4f}")
+        logger.info(
+            "Train Channel MSE - "
+            f"{format_channel_metrics(CHANNEL_NAMES, train_channel_mse.tolist())}"
+        )
+        logger.info(
+            "Train Channel RMSE - "
+            f"{format_channel_metrics(CHANNEL_NAMES, train_channel_rmse.tolist())}"
+        )
+        logger.info(
+            "Val Channel MSE - "
+            f"{format_channel_metrics(CHANNEL_NAMES, val_channel_mse.tolist())}"
+        )
+        logger.info(
+            "Val Channel RMSE - "
+            f"{format_channel_metrics(CHANNEL_NAMES, val_channel_rmse.tolist())}"
+        )
+        if test_loader is not None:
+            logger.info(
+                "Test Channel MSE (Held-out) - "
+                f"{format_channel_metrics(CHANNEL_NAMES, test_channel_mse.tolist())}"
+            )
+            logger.info(
+                "Test Channel RMSE (Held-out) - "
+                f"{format_channel_metrics(CHANNEL_NAMES, test_channel_rmse.tolist())}"
+            )
         
         # Save model checkpoint
         if val_loss < best_val_loss:
