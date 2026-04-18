@@ -7,6 +7,7 @@ from src.dataset_download import run_download
 from src.preprocessing import run_preprocessing
 from src.modeling.pretrain import run_pretrain
 from src.modeling.train import run_train
+from src.modeling.eval import run_eval
 
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -29,8 +30,10 @@ def main(cfg: DictConfig):
             except FileNotFoundError:
                 logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
     if run_cfg.get("train", False):
-        
         run_train(cfg, pretrained_state_dict=pretrained_state_dict)
+
+    if run_cfg.get("eval", False):
+        run_eval(cfg)
 
 
 if __name__ == "__main__":
