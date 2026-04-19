@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import hydra
 import torch
 from loguru import logger
@@ -31,6 +33,18 @@ def main(cfg: DictConfig):
                 logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
     
     if run_cfg.get("train", False):
+        # load pretrained weights from pretraind checkpoint if available
+        pretrained_state_dict = pretrained_state_dict or Path(hydra.utils.get_original_cwd()) / "checkpoints" / "pretrain" / "best_pretrained_epoch_1.pth"
+        if pretrained_state_dict and pretrained_state_dict.exists():
+            try:
+                pretrained_state_dict = torch.load(pretrained_state_dict, map_location="cpu")
+                logger.info(f"Loaded pretrained weights from {pretrained_state_dict}")
+            except FileNotFoundError:
+                logger.warning(f"Pretrained checkpoint not found: {pretrained_state_dict}")
+                pretrained_state_dict = None
+        else:
+            logger.warning(f"No pretrained checkpoint specified or found. Training will start from random initialization.")
+            pretrained_state_dict = None
         run_train(cfg, pretrained_state_dict=pretrained_state_dict)
 
     if run_cfg.get("eval", False):
