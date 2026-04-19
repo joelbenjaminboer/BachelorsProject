@@ -66,16 +66,14 @@ class Trainer:
         )
         self.model.to(self.device)
 
+        # In your train.py, before calling load_state_dict:
         if pretrained_state_dict is not None:
-            incompatible = self.model.load_state_dict(pretrained_state_dict, strict=False)
-            if incompatible.missing_keys or incompatible.unexpected_keys:
-                logger.warning(
-                    "Loaded pretrained weights with missing keys: {} and unexpected keys: {}",
-                    incompatible.missing_keys,
-                    incompatible.unexpected_keys,
-                )
-            else:
-                logger.info("Loaded pretrained weights successfully.")
+            # Remove the old positional encoding from the checkpoint
+            if "positional_layer.pe" in pretrained_state_dict:
+                del pretrained_state_dict["positional_layer.pe"]
+            
+            # Now load the remaining weights (Transformer, projections, etc.)
+            self.model.load_state_dict(pretrained_state_dict, strict=False)
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
