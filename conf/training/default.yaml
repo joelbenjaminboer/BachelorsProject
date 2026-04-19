@@ -1,5 +1,5 @@
 epochs: 5
-batch_size: 32
+batch_size: 64
 num_workers: 0
 persistent_workers: false
 learning_rate: 1.0e-4

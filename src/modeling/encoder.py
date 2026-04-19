@@ -32,7 +32,11 @@ class IMU_Intent_Encoder(nn.Module):
         self.reconstruction_head = nn.Linear(d_model, input_features)
 
         # Downstream prediction: Regression Head
-        self.regression_head = nn.Linear(d_model, forecast_horizon)
+        self.regression_head = nn.Sequential(
+            nn.Linear(d_model, dim_feedforward),
+            nn.ReLU(),
+            nn.Linear(dim_feedforward, forecast_horizon * input_features),
+        )
 
     def forward(self, x, mask=None, task="reconstruct"):
         # x shape: (Batch, 125, 6)
