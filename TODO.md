@@ -1,6 +1,7 @@
 - Add chunk masking to the encoder model for self-supervised pretraining.
 - Implement Model wrappers
 - Add Baseline model from alexandra
-- Take a look at the regression head and how to pool the encoder output for prediction.
 - Analyse prediction performance and compare to baselines. Look at the effect of different hyperparameters (e.g. forecast horizon, model size, etc.) on performance.
 - Add more logging and visualization to track training progress and performance.
+
+- Look at cls token performance vs. last token performance for regression head.

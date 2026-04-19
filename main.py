@@ -29,6 +29,7 @@ def main(cfg: DictConfig):
                 logger.info(f"Loaded pretrained weights from {checkpoint_path}")
             except FileNotFoundError:
                 logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
+    
     if run_cfg.get("train", False):
         run_train(cfg, pretrained_state_dict=pretrained_state_dict)
 

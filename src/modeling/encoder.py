@@ -16,6 +16,9 @@ class IMU_Intent_Encoder(nn.Module):
         super(IMU_Intent_Encoder, self).__init__()
         # Project the 6 IMU features into a larger dimension
         self.input_projection = nn.Linear(input_features, d_model)
+        
+        # Learnable CLS token for pooling
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         # Positional encoding layer
         self.positional_layer = PositionalEncoding(d_model=d_model, max_len=seq_length)
@@ -43,6 +46,11 @@ class IMU_Intent_Encoder(nn.Module):
 
         # Project: (Batch, 125, 6) -> (Batch, 125, 64)
         x = self.input_projection(x)
+        
+        # Prepend CLS token to the batch
+        # (1, 1, 64) -> (Batch, 1, 64)
+        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1) # Shape: (Batch, 126, 64)
 
         # Apply Masking
         if mask is not None:
@@ -62,8 +70,8 @@ class IMU_Intent_Encoder(nn.Module):
             # Shape: (Batch, 125, 64) -> (Batch, 125, 6)
             return self.reconstruction_head(encoded_x)
         if task == "predict":
-            # Pooling: Take the representation of the last time step
-            pooled = encoded_x[:, -1, :]  # Shape: (Batch, 64)
+            # Pooling: Take the representation of the CLS token
+            pooled = encoded_x[:, 0, :]  # Shape: (Batch, 64)
             return self.regression_head(pooled)
 
         raise ValueError(f"Unknown task: {task}")
