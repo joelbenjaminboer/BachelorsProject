@@ -103,7 +103,8 @@ class Pretrainer:
         self.split_seed = cfg.training.get("split_seed", 42)
         self.processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
 
-        num_workers = min(os.cpu_count() or 1, 8)
+        num_workers = cfg.training.get("num_workers", min(os.cpu_count() or 1, 8))
+        persistent_workers = cfg.training.get("persistent_workers")
         (
             self.train_loader,
             self.val_loader,
@@ -120,6 +121,7 @@ class Pretrainer:
             include_test_loader=False,
             seed=self.split_seed,
             num_workers=num_workers,
+            persistent_workers=persistent_workers,
         )
 
         logger.info(

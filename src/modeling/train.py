@@ -39,20 +39,23 @@ class Trainer:
             self.dataset, [train_size, val_size]
         )
 
-        num_workers = min(os.cpu_count() or 1, 8)
+        num_workers = cfg.training.get("num_workers", min(os.cpu_count() or 1, 8))
+        persistent_workers = cfg.training.get("persistent_workers", num_workers > 0)
+        if num_workers == 0:
+            persistent_workers = False
         self.train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=num_workers,
-            persistent_workers=(num_workers > 0),
+            persistent_workers=persistent_workers,
         )
         self.val_loader = DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=num_workers,
-            persistent_workers=(num_workers > 0),
+            persistent_workers=persistent_workers,
         )
 
         logger.info("Initializing IMU_Intent_Encoder from encoder.py")

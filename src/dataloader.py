@@ -127,6 +127,7 @@ def build_pretrain_dataloaders(
     include_test_loader: bool = True,
     seed: int = 42,
     num_workers: Optional[int] = None,
+    persistent_workers: Optional[bool] = None,
 ):
     normalized_strategy = str(split_strategy).strip().lower()
     if normalized_strategy not in {"loso", "leave_one_subject_out", "random"}:
@@ -181,7 +182,10 @@ def build_pretrain_dataloaders(
     if num_workers is None:
         num_workers = min(os.cpu_count() or 1, 8)
 
-    persistent_workers = num_workers > 0
+    if num_workers == 0:
+        persistent_workers = False
+    elif persistent_workers is None:
+        persistent_workers = num_workers > 0
 
     train_loader = DataLoader(
         train_dataset,
