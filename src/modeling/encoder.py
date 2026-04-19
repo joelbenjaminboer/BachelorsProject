@@ -5,13 +5,15 @@ import torch.nn as nn
 class IMU_Intent_Encoder(nn.Module):
     def __init__(
         self,
-        input_features=6,
-        seq_length=125,
-        forecast_horizon=50,
-        d_model=64,
-        num_heads=4,
-        num_layers=3,
-        dim_feedforward=128,
+        input_features,
+        seq_length,
+        forecast_horizon,
+        d_model,
+        num_heads,
+        num_layers,
+        dim_feedforward,
+        positional_encoding_max_len,
+        positional_encoding_base,
     ):
         super(IMU_Intent_Encoder, self).__init__()
         # Project the 6 IMU features into a larger dimension
@@ -21,7 +23,11 @@ class IMU_Intent_Encoder(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         # Positional encoding layer
-        self.positional_layer = PositionalEncoding(d_model=d_model, max_len=seq_length + 1)
+        self.positional_layer = PositionalEncoding(
+            d_model=d_model,
+            max_len=positional_encoding_max_len,
+            base=positional_encoding_base,
+        )
 
         # Setup the Transformer Encoder layers
         # batch_first=True makes our shapes (Batch, Seq, Features)
@@ -74,12 +80,12 @@ class IMU_Intent_Encoder(nn.Module):
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
+    def __init__(self, d_model, max_len, base):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model)
+            torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(base)) / d_model)
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)

@@ -1,13 +1,12 @@
 import os
 import torch
-import torch.nn as nn
 import hydra
 from omegaconf import DictConfig
 from loguru import logger
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
-from src.modeling.encoder import IMU_Intent_Encoder
+from src.modeling.factory import build_encoder, build_loss, build_optimizer
 
 # Setup device correctly
 if torch.backends.mps.is_available():
@@ -35,12 +34,40 @@ def format_channel_metrics(channel_names, values):
     return " | ".join(f"{channel}={value:.4f}" for channel, value in zip(channel_names, values))
 
 
+def build_contiguous_block_mask(
+    batch_size: int,
+    seq_length: int,
+    min_block_len: int,
+    max_block_len: int,
+    device: torch.device,
+):
+    if batch_size <= 0 or seq_length <= 0:
+        return torch.zeros(batch_size, max(seq_length, 0), dtype=torch.bool, device=device)
+
+    min_len = max(1, min(int(min_block_len), seq_length))
+    max_len = max(min_len, min(int(max_block_len), seq_length))
+
+    block_lengths = torch.randint(min_len, max_len + 1, (batch_size,), device=device)
+    max_start_positions = seq_length - block_lengths
+
+    # torch.randint does not support per-element upper bounds; use scaled random samples.
+    start_positions = (
+        torch.rand(batch_size, device=device) * (max_start_positions + 1).float()
+    ).floor().long()
+
+    time_indices = torch.arange(seq_length, device=device).unsqueeze(0)
+    return (time_indices >= start_positions.unsqueeze(1)) & (
+        time_indices < (start_positions + block_lengths).unsqueeze(1)
+    )
+
+
 def evaluate_masked_reconstruction(
     model,
     data_loader,
     criterion,
     seq_length,
-    mask_ratio,
+    mask_block_min_len,
+    mask_block_max_len,
     epoch,
     epochs,
     phase_label,
@@ -59,7 +86,13 @@ def evaluate_masked_reconstruction(
             past_imu = batch["past_imu"].to(device)
 
             batch_size_current = past_imu.size(0)
-            mask = torch.rand(batch_size_current, seq_length, device=device) < mask_ratio
+            mask = build_contiguous_block_mask(
+                batch_size=batch_size_current,
+                seq_length=seq_length,
+                min_block_len=mask_block_min_len,
+                max_block_len=mask_block_max_len,
+                device=device,
+            )
 
             reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
             loss = criterion(reconstructed_imu[mask], past_imu[mask])
@@ -96,7 +129,6 @@ class Pretrainer:
         self.forecast_horizon = cfg.training.forecast_horizon
         self.batch_size = cfg.training.batch_size
         self.epochs = cfg.training.epochs
-        self.learning_rate = cfg.training.learning_rate
         self.split_ratio = cfg.training.get("split_ratio", 0.9)
         self.split_strategy = cfg.training.get("split_strategy", "loso")
         self.holdout_subjects = cfg.training.get("holdout_subjects", [])
@@ -141,27 +173,27 @@ class Pretrainer:
             f"{', '.join(self.split_info['val_subjects']) or 'None'}"
         )
 
-        self.model = IMU_Intent_Encoder(
-            input_features=6,
+        self.model = build_encoder(
+            cfg=cfg,
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
-            d_model=64,
-            num_heads=4,
-            num_layers=3,
-            dim_feedforward=128,
         ).to(self.device)
 
-        self.criterion = nn.MSELoss()
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(), lr=self.learning_rate, weight_decay=1e-5
-        )
+        self.criterion = build_loss(cfg)
+        self.optimizer = build_optimizer(cfg, self.model.parameters())
 
-        self.mask_ratio = cfg.training.get("mask_ratio", 0.2)
+        raw_mask_block_min_len = int(cfg.training.get("mask_block_min_len", 10))
+        raw_mask_block_max_len = int(cfg.training.get("mask_block_max_len", 20))
+        self.mask_block_min_len = min(raw_mask_block_min_len, raw_mask_block_max_len)
+        self.mask_block_max_len = max(raw_mask_block_min_len, raw_mask_block_max_len)
         self.best_val_loss = float("inf")
         self.best_checkpoint_path = None
 
     def run(self):
-        logger.info(f"Starting MAE Pretraining with mask ratio {self.mask_ratio * 100}%")
+        logger.info(
+            "Starting MAE Pretraining with contiguous block masking "
+            f"(length range: {self.mask_block_min_len}-{self.mask_block_max_len})"
+        )
 
         for epoch in range(self.epochs):
             self.model.train()
@@ -172,9 +204,12 @@ class Pretrainer:
             for batch in tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]"):
                 past_imu = batch["past_imu"].to(self.device)
                 batch_size_current = past_imu.size(0)
-                mask = (
-                    torch.rand(batch_size_current, self.seq_length, device=self.device)
-                    < self.mask_ratio
+                mask = build_contiguous_block_mask(
+                    batch_size=batch_size_current,
+                    seq_length=self.seq_length,
+                    min_block_len=self.mask_block_min_len,
+                    max_block_len=self.mask_block_max_len,
+                    device=self.device,
                 )
 
                 self.optimizer.zero_grad()
@@ -208,7 +243,8 @@ class Pretrainer:
                 data_loader=self.val_loader,
                 criterion=self.criterion,
                 seq_length=self.seq_length,
-                mask_ratio=self.mask_ratio,
+                mask_block_min_len=self.mask_block_min_len,
+                mask_block_max_len=self.mask_block_max_len,
                 epoch=epoch,
                 epochs=self.epochs,
                 phase_label="Val",

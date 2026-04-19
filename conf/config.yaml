@@ -1,5 +1,6 @@
 defaults:
   - dataset: enabl3s
+  - model: default
   - training: default
   - run: default
   - _self_

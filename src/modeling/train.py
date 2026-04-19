@@ -4,10 +4,9 @@ import hydra
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from src.dataloader import IMUKneeDataset
-from src.modeling.encoder import IMU_Intent_Encoder
+from src.modeling.factory import build_encoder, build_loss, build_optimizer
 from loguru import logger
 from tqdm import tqdm
-import torch.nn as nn
 
 # Setup device
 if torch.backends.mps.is_available():
@@ -58,9 +57,9 @@ class Trainer:
             persistent_workers=persistent_workers,
         )
 
-        logger.info("Initializing IMU_Intent_Encoder from encoder.py")
-        self.model = IMU_Intent_Encoder(
-            input_features=6,
+        logger.info("Initializing IMU_Intent_Encoder from cfg.model")
+        self.model = build_encoder(
+            cfg=cfg,
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
         )
@@ -74,13 +73,10 @@ class Trainer:
             
             # Now load the remaining weights (Transformer, projections, etc.)
             self.model.load_state_dict(pretrained_state_dict, strict=False)
+            print("Loaded pretrained weights into the model (excluding positional encoding)")
 
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=cfg.training.learning_rate,
-            weight_decay=cfg.training.weight_decay,
-        )
-        self.criterion = nn.MSELoss()
+        self.optimizer = build_optimizer(cfg, self.model.parameters())
+        self.criterion = build_loss(cfg)
 
         self.epochs = cfg.training.epochs
         self.best_val_loss = float("inf")

@@ -6,10 +6,9 @@ import torch
 from loguru import logger
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
-import torch.nn as nn
 
 from src.dataloader import IMUKneeDataset
-from src.modeling.encoder import IMU_Intent_Encoder
+from src.modeling.factory import build_encoder
 
 
 # Setup device
@@ -57,13 +56,11 @@ class Evaluator:
             persistent_workers=persistent_workers,
         )
 
-        self.model = IMU_Intent_Encoder(
-            input_features=6,
+        self.model = build_encoder(
+            cfg=cfg,
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
         ).to(self.device)
-
-        self.criterion = nn.MSELoss(reduction="mean")
 
     def _find_best_checkpoint(self) -> Path:
         checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints"
