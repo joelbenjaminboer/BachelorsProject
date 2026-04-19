@@ -38,7 +38,7 @@ class IMU_Intent_Encoder(nn.Module):
         self.regression_head = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
             nn.ReLU(),
-            nn.Linear(dim_feedforward, forecast_horizon * input_features),
+            nn.Linear(dim_feedforward, forecast_horizon),
         )
 
     def forward(self, x, mask=None, task="reconstruct"):
