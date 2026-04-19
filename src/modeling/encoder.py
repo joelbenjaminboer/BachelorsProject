@@ -21,7 +21,7 @@ class IMU_Intent_Encoder(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         # Positional encoding layer
-        self.positional_layer = PositionalEncoding(d_model=d_model, max_len=seq_length)
+        self.positional_layer = PositionalEncoding(d_model=d_model, max_len=seq_length + 1)
 
         # Setup the Transformer Encoder layers
         # batch_first=True makes our shapes (Batch, Seq, Features)
