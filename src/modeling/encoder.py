@@ -42,39 +42,35 @@ class IMU_Intent_Encoder(nn.Module):
         )
 
     def forward(self, x, mask=None, task="reconstruct"):
-        # x shape: (Batch, 125, 6)
+            # 1. Project: (Batch, 125, 6) -> (Batch, 125, 64)
+            x = self.input_projection(x)
 
-        # Project: (Batch, 125, 6) -> (Batch, 125, 64)
-        x = self.input_projection(x)
-        
-        # Prepend CLS token to the batch
-        # (1, 1, 64) -> (Batch, 1, 64)
-        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1) # Shape: (Batch, 126, 64)
+            # 2. Apply Masking FIRST (while sequence is still 125)
+            if mask is not None:
+                bool_mask = mask.unsqueeze(-1).bool()
+                x = torch.where(bool_mask, self.mask_token, x)
 
-        # Apply Masking
-        if mask is not None:
-            # mask shape: (Batch, 125)
-            # Expand mask token to the masked positions
-            bool_mask = mask.unsqueeze(-1).bool()
-            x = torch.where(bool_mask, self.mask_token, x)
+            # 3. Prepend CLS token (125 -> 126)
+            cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
+            x = torch.cat((cls_tokens, x), dim=1) 
 
-        # Add positional encoding: (Batch, 125, 64) -> (Batch, 125, 64)
-        x = self.positional_layer(x)
+            # 4. Positional Encoding
+            x = self.positional_layer(x)
 
-        # Pass through the Encoder
-        # Output shape is still (Batch, 125, 64)
-        encoded_x = self.transformer_encoder(x)
+            # 5. Transformer Encoder
+            encoded_x = self.transformer_encoder(x)
 
-        if task == "reconstruct":
-            # Shape: (Batch, 125, 64) -> (Batch, 125, 6)
-            return self.reconstruction_head(encoded_x)
-        if task == "predict":
-            # Pooling: Take the representation of the CLS token
-            pooled = encoded_x[:, 0, :]  # Shape: (Batch, 64)
-            return self.regression_head(pooled)
+            if task == "reconstruct":
+                # Remove the CLS token (index 0) so output is 125 again
+                # Shape: (Batch, 1:126, 64) -> (Batch, 125, 6)
+                return self.reconstruction_head(encoded_x[:, 1:, :])
+                
+            if task == "predict":
+                # Use only the CLS token for the regression head
+                pooled = encoded_x[:, 0, :] 
+                return self.regression_head(pooled)
 
-        raise ValueError(f"Unknown task: {task}")
+            raise ValueError(f"Unknown task: {task}")
 
 
 class PositionalEncoding(nn.Module):
