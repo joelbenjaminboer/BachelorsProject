@@ -1,4 +1,3 @@
-- Add chunk masking to the encoder model for self-supervised pretraining.
 - Implement Model wrappers
 - Add Baseline model from alexandra
 - Analyse prediction performance and compare to baselines. Look at the effect of different hyperparameters (e.g. forecast horizon, model size, etc.) on performance.
