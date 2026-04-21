@@ -22,10 +22,12 @@ else:
 
 
 class Evaluator:
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, version=None):
         self.cfg = cfg
         self.device = device
-
+        self.version = version
+        logger.info(f"Using device: {self.device} for Evaluation")
+        logger.info(f"Evaluation version: {self.version}")
         self.seq_length = cfg.training.context_length
         self.forecast_horizon = cfg.training.forecast_horizon
         self.batch_size = cfg.training.batch_size
@@ -219,14 +221,14 @@ class Evaluator:
         }
 
 
-def run_eval(cfg: DictConfig):
-    evaluator = Evaluator(cfg)
+def run_eval(cfg: DictConfig, version=None):
+    evaluator = Evaluator(cfg, version=version)
     return evaluator.run()
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    run_eval(cfg)
+    run_eval(cfg, version=cfg.get("version", "0.1.0"))
 
 
 if __name__ == "__main__":

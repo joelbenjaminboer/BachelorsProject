@@ -1,5 +1,5 @@
 enabled: true
-save_subdir: plots
+save_subdir: plots/${version}
 save_metrics: true
 save_formats: ["png"]
 dpi: 180

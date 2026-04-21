@@ -21,9 +21,10 @@ else:
 
 
 class Trainer:
-    def __init__(self, cfg: DictConfig, pretrained_state_dict=None):
+    def __init__(self, cfg: DictConfig, pretrained_state_dict=None, version=None):
         self.cfg = cfg
         self.device = device
+        self.version = version
 
         logger.info(f"Using device: {self.device}")
 
@@ -77,6 +78,8 @@ class Trainer:
             # Now load the remaining weights (Transformer, projections, etc.)
             self.model.load_state_dict(pretrained_state_dict, strict=False)
             print("Loaded pretrained weights into the model (excluding positional encoding)")
+        
+        logger.info(f"version: {self.version}")
 
         self.optimizer = build_optimizer(cfg, self.model.parameters())
         self.criterion = build_loss(cfg)
@@ -132,7 +135,7 @@ class Trainer:
                 self.best_val_loss = val_loss
                 checkpoint_path = os.path.join(
                     hydra.utils.get_original_cwd(),
-                    "checkpoints",
+                    "checkpoints", self.version or "default",
                     f"best_model_epoch_{epoch + 1}.pth",
                 )
                 os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
@@ -161,14 +164,14 @@ class Trainer:
         )
 
 
-def run_train(cfg: DictConfig, pretrained_state_dict=None):
-    trainer = Trainer(cfg, pretrained_state_dict=pretrained_state_dict)
+def run_train(cfg: DictConfig, pretrained_state_dict=None, version=None):
+    trainer = Trainer(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
     trainer.run()
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    run_train(cfg)
+    run_train(cfg, version=cfg.get("version", "0.1.0"))
 
 
 if __name__ == "__main__":

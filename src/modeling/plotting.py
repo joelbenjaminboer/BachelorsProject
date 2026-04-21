@@ -10,11 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from omegaconf import DictConfig
 import torch
-
-try:
-    import seaborn as sns
-except ImportError:  # pragma: no cover - optional dependency fallback
-    sns = None
+import seaborn as sns
 
 
 def _plot_cfg(cfg: DictConfig):

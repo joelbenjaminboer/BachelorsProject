@@ -16,15 +16,16 @@ from src.modeling.eval import run_eval
 def main(cfg: DictConfig):
     run_cfg = cfg.get("run", {})
     pretrained_state_dict = None
+    version = cfg.get("version", "0.1.0")
 
     if run_cfg.get("download", False):
         run_download(cfg)
         
     if run_cfg.get("preprocess", False):
-        run_preprocessing(cfg)
+        run_preprocessing(cfg, version=version)
         
     if run_cfg.get("pretrain", False):
-        checkpoint_path = run_pretrain(cfg)
+        checkpoint_path = run_pretrain(cfg, version=version)
         if checkpoint_path:
             try:
                 pretrained_state_dict = torch.load(checkpoint_path, map_location="cpu")
@@ -37,10 +38,10 @@ def main(cfg: DictConfig):
         pretrained_state_dict = Path(hydra.utils.get_original_cwd()) / "checkpoints" / "pretrain" / "best_pretrained_epoch_1.pth"
         if pretrained_state_dict.exists():
             pretrained_state_dict = torch.load(pretrained_state_dict, map_location="cpu")
-        run_train(cfg, pretrained_state_dict=pretrained_state_dict)
+        run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
 
     if run_cfg.get("eval", False):
-        run_eval(cfg)
+        run_eval(cfg, version=version)
 
 
 if __name__ == "__main__":

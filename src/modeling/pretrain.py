@@ -121,11 +121,13 @@ def evaluate_masked_reconstruction(
 
 
 class Pretrainer:
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, version=None):
         self.cfg = cfg
         self.device = device
+        self.version = version
 
         logger.info(f"Using device: {self.device} for Pretraining")
+        logger.info(f"Pretraining version: {self.version}")
 
         self.seq_length = cfg.training.context_length
         self.forecast_horizon = cfg.training.forecast_horizon
@@ -291,7 +293,7 @@ class Pretrainer:
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.best_epoch = epoch + 1
-                save_dir = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", "pretrain")
+                save_dir = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", "pretrain", self.version or "default")
                 os.makedirs(save_dir, exist_ok=True)
                 checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
 
@@ -332,14 +334,14 @@ class Pretrainer:
         return self.best_checkpoint_path
 
 
-def run_pretrain(cfg: DictConfig):
-    trainer = Pretrainer(cfg)
+def run_pretrain(cfg: DictConfig, version=None):
+    trainer = Pretrainer(cfg, version=version)
     return trainer.run()
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    run_pretrain(cfg)
+    run_pretrain(cfg, version=cfg.get("version", "0.1.0"))
 
 
 if __name__ == "__main__":
