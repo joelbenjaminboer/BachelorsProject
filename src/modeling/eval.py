@@ -66,7 +66,7 @@ class Evaluator:
         ).to(self.device)
 
     def _find_best_checkpoint(self) -> Path:
-        checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints"
+        checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints" / f"version_{self.version}"
         candidates = sorted(checkpoints_dir.glob("best_model_epoch_*.pth"))
 
         if not candidates:

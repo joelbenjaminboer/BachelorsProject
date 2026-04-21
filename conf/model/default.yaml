@@ -1,9 +1,9 @@
 encoder:
   input_features: 6
-  d_model: 256
+  d_model: 128
   num_heads: 4
   num_layers: 3
-  dim_feedforward: 1024
+  dim_feedforward: 512
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0

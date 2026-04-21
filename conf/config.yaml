@@ -6,4 +6,4 @@ defaults:
   - plotting: default
   - _self_
 
-version: dim-256-plottest
+version: dim128
