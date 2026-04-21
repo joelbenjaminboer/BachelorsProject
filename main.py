@@ -34,6 +34,10 @@ def main(cfg: DictConfig):
                 logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
     
     if run_cfg.get("train", False):
+        # load pretrained weights from pretraind checkpoint if available
+        pretrained_state_dict = Path(hydra.utils.get_original_cwd()) / "checkpoints" / "pretrain" / f"{version}" / "best_pretrained_epoch_10.pth"
+        if pretrained_state_dict.exists():
+            pretrained_state_dict = torch.load(pretrained_state_dict, map_location="cpu")
         run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
 
     if run_cfg.get("eval", False):
