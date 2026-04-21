@@ -1,12 +1,15 @@
 import os
-import torch
+
 import hydra
+from loguru import logger
 from omegaconf import DictConfig
+import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 from src.dataloader import IMUKneeDataset
 from src.modeling.factory import build_encoder, build_loss, build_optimizer
-from loguru import logger
-from tqdm import tqdm
+from src.modeling.plotting import save_train_artifacts, should_save_intermediate_epoch
 
 # Setup device
 if torch.backends.mps.is_available():
@@ -80,8 +83,13 @@ class Trainer:
 
         self.epochs = cfg.training.epochs
         self.best_val_loss = float("inf")
+        self.best_epoch = None
+        self.best_checkpoint_path = None
 
     def run(self):
+        train_loss_history = []
+        val_loss_history = []
+
         for epoch in range(self.epochs):
             self.model.train()
             train_loss = 0.0
@@ -117,6 +125,9 @@ class Trainer:
                 f"Val Loss: {val_loss:.4f}"
             )
 
+            train_loss_history.append(float(train_loss))
+            val_loss_history.append(float(val_loss))
+
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 checkpoint_path = os.path.join(
@@ -127,6 +138,27 @@ class Trainer:
                 os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
                 torch.save(self.model.state_dict(), checkpoint_path)
                 logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
+                self.best_epoch = epoch + 1
+                self.best_checkpoint_path = checkpoint_path
+
+            if should_save_intermediate_epoch(self.cfg, epoch):
+                save_train_artifacts(
+                    cfg=self.cfg,
+                    train_losses=train_loss_history,
+                    val_losses=val_loss_history,
+                    best_epoch=self.best_epoch,
+                    best_checkpoint_path=self.best_checkpoint_path,
+                    tag=f"epoch_{epoch + 1:03d}",
+                )
+
+        save_train_artifacts(
+            cfg=self.cfg,
+            train_losses=train_loss_history,
+            val_losses=val_loss_history,
+            best_epoch=self.best_epoch,
+            best_checkpoint_path=self.best_checkpoint_path,
+            tag="final",
+        )
 
 
 def run_train(cfg: DictConfig, pretrained_state_dict=None):

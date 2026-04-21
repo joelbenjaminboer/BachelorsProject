@@ -3,4 +3,5 @@ defaults:
   - model: default
   - training: default
   - run: default
+  - plotting: default
   - _self_

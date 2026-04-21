@@ -5,4 +5,6 @@ ruff
 tqdm
 typer
 hydra-core
+matplotlib
+seaborn
 -e .

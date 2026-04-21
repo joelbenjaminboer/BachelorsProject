@@ -6,7 +6,6 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
-
 IMU_COLS = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
 
 
@@ -63,6 +62,7 @@ class IMUKneeDataset(Dataset):
         self.knee_sequences: list[torch.Tensor] = []
         self.valid_indices: list[tuple[int, int]] = []
         self.window_subject_ids: list[str] = []
+        self.window_start_indices: list[int] = []
 
         self.load_data(data_dir)
 
@@ -99,6 +99,7 @@ class IMUKneeDataset(Dataset):
 
             self.valid_indices.extend((seq_idx, start_idx) for start_idx in range(num_windows))
             self.window_subject_ids.extend([subject_id] * num_windows)
+            self.window_start_indices.extend(range(num_windows))
 
     def __len__(self):
         return len(self.valid_indices)
@@ -113,6 +114,8 @@ class IMUKneeDataset(Dataset):
         return {
             "past_imu": past_imu,
             "future_knee": future_knee,
+            "subject_id": self.window_subject_ids[idx],
+            "window_start_idx": self.window_start_indices[idx],
         }
 
 

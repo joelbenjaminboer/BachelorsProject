@@ -1,0 +1,34 @@
+enabled: true
+save_subdir: plots
+save_metrics: true
+save_formats: ["png"]
+dpi: 180
+style: whitegrid
+palette: deep
+context: talk
+
+cadence:
+  every_n_epochs: 1
+  save_intermediate: true
+
+stages:
+  pretrain: true
+  train: true
+  eval: true
+
+pretrain:
+  plot_loss: true
+  plot_channel_metrics: true
+
+train:
+  plot_loss: true
+
+eval:
+  plot_overall_summary: true
+  plot_per_step_metrics: true
+  plot_residual_histogram: true
+  plot_prediction_examples: true
+  plot_subject_bars: true
+  prediction_examples: 6
+  residual_bins: 60
+  max_subjects_in_plot: 20

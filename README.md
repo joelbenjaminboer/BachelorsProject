@@ -54,3 +54,44 @@ Comparing transformer architecture against current deep neural networks for cont
 
 --------
 
+## Configurable Plotting
+
+The training pipeline now supports configurable plotting and metric artifact generation for
+pretraining, supervised training, and evaluation.
+
+- Configuration file: `conf/plotting/default.yaml`
+- Output location: `outputs/YYYY-MM-DD/HH-MM-SS/plots/<stage>/`
+- Artifacts include stage metrics JSON and plots (format controlled by config).
+
+### Useful Hydra Overrides
+
+Run full pipeline with plotting enabled:
+
+```bash
+python main.py plotting.enabled=true run.pretrain=true run.train=true run.eval=true
+```
+
+Generate intermediate plots every 2 epochs (default):
+
+```bash
+python main.py plotting.cadence.every_n_epochs=2
+```
+
+Disable intermediate artifacts and keep only final reports:
+
+```bash
+python main.py plotting.cadence.save_intermediate=false
+```
+
+Disable specific eval plot categories:
+
+```bash
+python main.py plotting.eval.plot_prediction_examples=false plotting.eval.plot_subject_bars=false
+```
+
+Save additional formats:
+
+```bash
+python main.py plotting.save_formats='["png","pdf"]'
+```
+

@@ -1,12 +1,14 @@
 import os
-import torch
+
 import hydra
-from omegaconf import DictConfig
 from loguru import logger
+from omegaconf import DictConfig
+import torch
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
 from src.modeling.factory import build_encoder, build_loss, build_optimizer
+from src.modeling.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
 
 # Setup device correctly
 if torch.backends.mps.is_available():
@@ -187,6 +189,7 @@ class Pretrainer:
         self.mask_block_min_len = min(raw_mask_block_min_len, raw_mask_block_max_len)
         self.mask_block_max_len = max(raw_mask_block_min_len, raw_mask_block_max_len)
         self.best_val_loss = float("inf")
+        self.best_epoch = None
         self.best_checkpoint_path = None
 
     def run(self):
@@ -194,6 +197,13 @@ class Pretrainer:
             "Starting MAE Pretraining with contiguous block masking "
             f"(length range: {self.mask_block_min_len}-{self.mask_block_max_len})"
         )
+
+        train_loss_history = []
+        val_loss_history = []
+        train_channel_mse_history = []
+        val_channel_mse_history = []
+        train_channel_rmse_history = []
+        val_channel_rmse_history = []
 
         for epoch in range(self.epochs):
             self.model.train()
@@ -271,8 +281,16 @@ class Pretrainer:
                 f"{format_channel_metrics(CHANNEL_NAMES, val_channel_rmse.tolist())}"
             )
 
+            train_loss_history.append(float(train_loss))
+            val_loss_history.append(float(val_loss))
+            train_channel_mse_history.append(train_channel_mse.tolist())
+            val_channel_mse_history.append(val_channel_mse.tolist())
+            train_channel_rmse_history.append(train_channel_rmse.tolist())
+            val_channel_rmse_history.append(val_channel_rmse.tolist())
+
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
+                self.best_epoch = epoch + 1
                 save_dir = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", "pretrain")
                 os.makedirs(save_dir, exist_ok=True)
                 checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
@@ -281,6 +299,35 @@ class Pretrainer:
                 logger.info(f"Saved new best pretrained checkpoint to {checkpoint_path}")
 
                 self.best_checkpoint_path = checkpoint_path
+
+            if should_save_intermediate_epoch(self.cfg, epoch):
+                save_pretrain_artifacts(
+                    cfg=self.cfg,
+                    channel_names=CHANNEL_NAMES,
+                    train_losses=train_loss_history,
+                    val_losses=val_loss_history,
+                    train_channel_mse=train_channel_mse_history,
+                    val_channel_mse=val_channel_mse_history,
+                    train_channel_rmse=train_channel_rmse_history,
+                    val_channel_rmse=val_channel_rmse_history,
+                    best_epoch=self.best_epoch,
+                    best_checkpoint_path=self.best_checkpoint_path,
+                    tag=f"epoch_{epoch + 1:03d}",
+                )
+
+        save_pretrain_artifacts(
+            cfg=self.cfg,
+            channel_names=CHANNEL_NAMES,
+            train_losses=train_loss_history,
+            val_losses=val_loss_history,
+            train_channel_mse=train_channel_mse_history,
+            val_channel_mse=val_channel_mse_history,
+            train_channel_rmse=train_channel_rmse_history,
+            val_channel_rmse=val_channel_rmse_history,
+            best_epoch=self.best_epoch,
+            best_checkpoint_path=self.best_checkpoint_path,
+            tag="final",
+        )
 
         return self.best_checkpoint_path
 
