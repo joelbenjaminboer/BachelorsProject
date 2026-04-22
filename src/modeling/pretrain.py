@@ -9,14 +9,19 @@ from tqdm import tqdm
 from src.dataloader import build_pretrain_dataloaders
 from src.modeling.factory import build_encoder, build_loss, build_optimizer
 from src.modeling.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
-
-# Setup device correctly
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-elif torch.cuda.is_available():
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
+from src.modeling.runtime import (
+    autocast_context,
+    build_grad_scaler,
+    configure_runtime,
+    maybe_compile_model,
+    maybe_wrap_parallel,
+    resolve_autocast_kwargs,
+    resolve_dataloader_kwargs,
+    resolve_device,
+    resolve_gradient_settings,
+    unwrap_model,
+    use_non_blocking_transfer,
+)
 
 CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
 
@@ -67,6 +72,9 @@ def evaluate_masked_reconstruction(
     model,
     data_loader,
     criterion,
+    device,
+    autocast_kwargs,
+    non_blocking_transfer,
     seq_length,
     mask_block_min_len,
     mask_block_max_len,
@@ -83,9 +91,9 @@ def evaluate_masked_reconstruction(
     phase_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
     phase_masked_count = 0
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{epochs} [{phase_label}]"):
-            past_imu = batch["past_imu"].to(device)
+            past_imu = batch["past_imu"].to(device, non_blocking=non_blocking_transfer)
 
             batch_size_current = past_imu.size(0)
             mask = build_contiguous_block_mask(
@@ -96,8 +104,9 @@ def evaluate_masked_reconstruction(
                 device=device,
             )
 
-            reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
-            loss = criterion(reconstructed_imu[mask], past_imu[mask])
+            with autocast_context(autocast_kwargs):
+                reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
+                loss = criterion(reconstructed_imu[mask], past_imu[mask])
 
             batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                 reconstructed_imu, past_imu, mask
@@ -123,8 +132,12 @@ def evaluate_masked_reconstruction(
 class Pretrainer:
     def __init__(self, cfg: DictConfig, version=None):
         self.cfg = cfg
-        self.device = device
-        self.version = version
+        self.device = resolve_device(cfg)
+        self.version = version or cfg.get("version", "default")
+        configure_runtime(cfg, self.device)
+        self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
+        self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
+        self.accumulation_steps, self.clip_grad_norm = resolve_gradient_settings(cfg)
 
         logger.info(f"Using device: {self.device} for Pretraining")
         logger.info(f"Pretraining version: {self.version}")
@@ -139,8 +152,12 @@ class Pretrainer:
         self.split_seed = cfg.training.get("split_seed", 42)
         self.processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
 
-        num_workers = cfg.training.get("num_workers", min(os.cpu_count() or 1, 8))
-        persistent_workers = cfg.training.get("persistent_workers")
+        loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
+        self.non_blocking_transfer = use_non_blocking_transfer(
+            cfg,
+            self.device,
+            pin_memory=loader_kwargs.get("pin_memory", False),
+        )
         (
             self.train_loader,
             self.val_loader,
@@ -156,8 +173,10 @@ class Pretrainer:
             holdout_subjects=self.holdout_subjects,
             include_test_loader=False,
             seed=self.split_seed,
-            num_workers=num_workers,
-            persistent_workers=persistent_workers,
+            num_workers=loader_kwargs.get("num_workers"),
+            persistent_workers=loader_kwargs.get("persistent_workers"),
+            prefetch_factor=loader_kwargs.get("prefetch_factor"),
+            pin_memory=loader_kwargs.get("pin_memory"),
         )
 
         logger.info(
@@ -183,8 +202,11 @@ class Pretrainer:
             forecast_horizon=self.forecast_horizon,
         ).to(self.device)
 
+        self.model = maybe_compile_model(self.model, cfg)
+        self.model = maybe_wrap_parallel(self.model, cfg, self.device)
+
         self.criterion = build_loss(cfg)
-        self.optimizer = build_optimizer(cfg, self.model.parameters())
+        self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
 
         raw_mask_block_min_len = int(cfg.training.get("mask_block_min_len", 10))
         raw_mask_block_max_len = int(cfg.training.get("mask_block_max_len", 20))
@@ -212,9 +234,15 @@ class Pretrainer:
             train_loss = 0.0
             train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=self.device)
             train_masked_count = 0
+            self.optimizer.zero_grad(set_to_none=True)
 
-            for batch in tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]"):
-                past_imu = batch["past_imu"].to(self.device)
+            for batch_idx, batch in enumerate(
+                tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]")
+            ):
+                past_imu = batch["past_imu"].to(
+                    self.device,
+                    non_blocking=self.non_blocking_transfer,
+                )
                 batch_size_current = past_imu.size(0)
                 mask = build_contiguous_block_mask(
                     batch_size=batch_size_current,
@@ -224,10 +252,10 @@ class Pretrainer:
                     device=self.device,
                 )
 
-                self.optimizer.zero_grad()
-
-                reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
-                loss = self.criterion(reconstructed_imu[mask], past_imu[mask])
+                with autocast_context(self.autocast_kwargs):
+                    reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
+                    loss = self.criterion(reconstructed_imu[mask], past_imu[mask])
+                    loss_for_backward = loss / self.accumulation_steps
 
                 batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                     reconstructed_imu, past_imu, mask
@@ -236,8 +264,28 @@ class Pretrainer:
                     train_sq_error_sum += batch_sq_error_sum
                     train_masked_count += batch_masked_count
 
-                loss.backward()
-                self.optimizer.step()
+                if self.scaler is not None:
+                    self.scaler.scale(loss_for_backward).backward()
+                else:
+                    loss_for_backward.backward()
+
+                should_step = ((batch_idx + 1) % self.accumulation_steps == 0) or (
+                    batch_idx + 1 == len(self.train_loader)
+                )
+                if should_step:
+                    if self.clip_grad_norm is not None:
+                        if self.scaler is not None:
+                            self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+
+                    if self.scaler is not None:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
+
+                    self.optimizer.zero_grad(set_to_none=True)
+
                 train_loss += loss.item()
 
             if len(self.train_loader) > 0:
@@ -254,6 +302,9 @@ class Pretrainer:
                 model=self.model,
                 data_loader=self.val_loader,
                 criterion=self.criterion,
+                device=self.device,
+                autocast_kwargs=self.autocast_kwargs,
+                non_blocking_transfer=self.non_blocking_transfer,
                 seq_length=self.seq_length,
                 mask_block_min_len=self.mask_block_min_len,
                 mask_block_max_len=self.mask_block_max_len,
@@ -297,7 +348,7 @@ class Pretrainer:
                 os.makedirs(save_dir, exist_ok=True)
                 checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
 
-                torch.save(self.model.state_dict(), checkpoint_path)
+                torch.save(unwrap_model(self.model).state_dict(), checkpoint_path)
                 logger.info(f"Saved new best pretrained checkpoint to {checkpoint_path}")
 
                 self.best_checkpoint_path = checkpoint_path

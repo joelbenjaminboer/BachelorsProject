@@ -1,0 +1,27 @@
+device: auto
+
+deterministic: false
+
+autocast:
+  enabled: auto
+  dtype: float16
+
+compile:
+  enabled: false
+  mode: reduce-overhead
+  fullgraph: false
+  dynamic: false
+  backend: null
+
+parallel:
+  strategy: auto
+
+cuda:
+  tf32: true
+  cudnn_benchmark: true
+  cudnn_deterministic: false
+  allow_fused_adamw: true
+
+gradient:
+  accumulation_steps: 1
+  clip_grad_norm: null

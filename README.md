@@ -95,3 +95,41 @@ Save additional formats:
 python main.py plotting.save_formats='["png","pdf"]'
 ```
 
+## GPU Optimization
+
+GPU optimization settings are centralized in `conf/gpu/default.yaml` and data pipeline
+throughput settings are in `conf/training/default.yaml`.
+
+- Device selection: `gpu.device` (`auto`, `cuda`, `mps`, `cpu`)
+- Mixed precision: `gpu.autocast.*`
+- Compiler: `gpu.compile.*`
+- Multi-GPU (single-process): `gpu.parallel.strategy` (`auto`, `dataparallel`, `none`)
+- Data pipeline overlap: `training.num_workers`, `training.pin_memory`,
+  `training.prefetch_factor`, `training.non_blocking_transfer`
+
+### Presets
+
+Balanced CUDA training:
+
+```bash
+python main.py gpu.device=cuda gpu.autocast.enabled=auto training.num_workers=8
+```
+
+Max throughput CUDA training:
+
+```bash
+python main.py gpu.device=cuda gpu.autocast.enabled=true gpu.compile.enabled=true gpu.cuda.tf32=true gpu.parallel.strategy=auto training.num_workers=8
+```
+
+Apple Silicon MPS training:
+
+```bash
+python main.py gpu.device=mps gpu.autocast.enabled=false training.num_workers=4
+```
+
+Strict reproducibility mode:
+
+```bash
+python main.py gpu.deterministic=true gpu.cuda.cudnn_benchmark=false
+```
+

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import random
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -7,6 +8,11 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
 IMU_COLS = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
+
+
+def _seed_worker(worker_id: int):
+    worker_seed = torch.initial_seed() % (2**32)
+    random.seed(worker_seed)
 
 
 def _normalize_subjects(subjects: Optional[Sequence[str]]) -> list[str]:
@@ -131,6 +137,8 @@ def build_pretrain_dataloaders(
     seed: int = 42,
     num_workers: Optional[int] = None,
     persistent_workers: Optional[bool] = None,
+    prefetch_factor: Optional[int] = None,
+    pin_memory: Optional[bool] = None,
 ):
     normalized_strategy = str(split_strategy).strip().lower()
     if normalized_strategy not in {"loso", "leave_one_subject_out", "random"}:
@@ -190,29 +198,40 @@ def build_pretrain_dataloaders(
     elif persistent_workers is None:
         persistent_workers = num_workers > 0
 
+    if pin_memory is None:
+        pin_memory = torch.cuda.is_available()
+
+    common_loader_kwargs = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "persistent_workers": persistent_workers,
+        "pin_memory": bool(pin_memory),
+        "worker_init_fn": _seed_worker if num_workers > 0 else None,
+    }
+
+    if num_workers > 0 and prefetch_factor is not None:
+        common_loader_kwargs["prefetch_factor"] = max(2, int(prefetch_factor))
+
+    train_loader_generator = torch.Generator().manual_seed(seed)
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
-        persistent_workers=persistent_workers,
+        generator=train_loader_generator,
+        **common_loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        persistent_workers=persistent_workers,
+        **common_loader_kwargs,
     )
 
     test_loader = None
     if test_dataset is not None:
         test_loader = DataLoader(
             test_dataset,
-            batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            persistent_workers=persistent_workers,
+            **common_loader_kwargs,
         )
 
     split_info = {

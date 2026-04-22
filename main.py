@@ -1,15 +1,14 @@
 from pathlib import Path
 
 import hydra
-import torch
 from loguru import logger
 from omegaconf import DictConfig
-
 from src.dataset_download import run_download
-from src.preprocessing import run_preprocessing
+from src.modeling.eval import run_eval
 from src.modeling.pretrain import run_pretrain
 from src.modeling.train import run_train
-from src.modeling.eval import run_eval
+from src.preprocessing import run_preprocessing
+import torch
 
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -34,10 +33,24 @@ def main(cfg: DictConfig):
                 logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
     
     if run_cfg.get("train", False):
-        # load pretrained weights from pretraind checkpoint if available
-        pretrained_state_dict = Path(hydra.utils.get_original_cwd()) / "checkpoints" / "pretrain" / f"{version}" / "best_pretrained_epoch_10.pth"
-        if pretrained_state_dict.exists():
-            pretrained_state_dict = torch.load(pretrained_state_dict, map_location="cpu")
+        if pretrained_state_dict is None:
+            pretrain_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints" / "pretrain" / f"{version}"
+            candidates = sorted(pretrain_dir.glob("best_pretrained_epoch_*.pth"))
+
+            def epoch_number(path: Path) -> int:
+                name = path.stem
+                try:
+                    return int(name.split("best_pretrained_epoch_")[-1])
+                except ValueError:
+                    return -1
+
+            if candidates:
+                best_pretrained = max(candidates, key=lambda p: (epoch_number(p), p.stat().st_mtime))
+                pretrained_state_dict = torch.load(best_pretrained, map_location="cpu")
+                logger.info(f"Loaded pretrained weights from {best_pretrained}")
+            else:
+                logger.warning(f"No pretrained checkpoints found in {pretrain_dir}")
+
         run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
 
     if run_cfg.get("eval", False):

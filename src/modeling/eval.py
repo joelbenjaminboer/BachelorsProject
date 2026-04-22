@@ -1,5 +1,4 @@
 from collections import defaultdict
-import os
 from pathlib import Path
 
 import hydra
@@ -11,21 +10,26 @@ from torch.utils.data import DataLoader
 from src.dataloader import IMUKneeDataset
 from src.modeling.factory import build_encoder
 from src.modeling.plotting import save_eval_artifacts
-
-# Setup device
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-elif torch.cuda.is_available():
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
+from src.modeling.runtime import (
+    autocast_context,
+    configure_runtime,
+    maybe_compile_model,
+    maybe_wrap_parallel,
+    resolve_autocast_kwargs,
+    resolve_dataloader_kwargs,
+    resolve_device,
+    unwrap_model,
+    use_non_blocking_transfer,
+)
 
 
 class Evaluator:
     def __init__(self, cfg: DictConfig, version=None):
         self.cfg = cfg
-        self.device = device
-        self.version = version
+        self.device = resolve_device(cfg)
+        self.version = version or cfg.get("version", "default")
+        configure_runtime(cfg, self.device)
+        self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
         logger.info(f"Using device: {self.device} for Evaluation")
         logger.info(f"Evaluation version: {self.version}")
         self.seq_length = cfg.training.context_length
@@ -47,16 +51,17 @@ class Evaluator:
         if len(self.dataset) == 0:
             raise ValueError("No samples found for held-out subjects")
 
-        num_workers = cfg.training.get("num_workers", min(os.cpu_count() or 1, 8))
-        persistent_workers = cfg.training.get("persistent_workers", num_workers > 0)
-        if num_workers == 0:
-            persistent_workers = False
+        loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
+        self.non_blocking_transfer = use_non_blocking_transfer(
+            cfg,
+            self.device,
+            pin_memory=loader_kwargs.get("pin_memory", False),
+        )
         self.loader = DataLoader(
             self.dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            persistent_workers=persistent_workers,
+            **loader_kwargs,
         )
 
         self.model = build_encoder(
@@ -64,14 +69,31 @@ class Evaluator:
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
         ).to(self.device)
+        self.model = maybe_compile_model(self.model, cfg)
+        self.model = maybe_wrap_parallel(self.model, cfg, self.device)
 
     def _find_best_checkpoint(self) -> Path:
-        checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints" / f"version_{self.version}"
-        candidates = sorted(checkpoints_dir.glob("best_model_epoch_*.pth"))
+        base_checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints"
+
+        checkpoint_dirs = []
+        if self.version:
+            checkpoint_dirs.append(base_checkpoints_dir / str(self.version))
+            checkpoint_dirs.append(base_checkpoints_dir / f"version_{self.version}")
+        checkpoint_dirs.append(base_checkpoints_dir)
+
+        candidates = []
+        seen = set()
+        for checkpoints_dir in checkpoint_dirs:
+            if checkpoints_dir in seen:
+                continue
+            seen.add(checkpoints_dir)
+            candidates.extend(sorted(checkpoints_dir.glob("best_model_epoch_*.pth")))
 
         if not candidates:
+            searched_dirs = ", ".join(str(path) for path in checkpoint_dirs)
             raise FileNotFoundError(
-                f"No checkpoints found in {checkpoints_dir}. Expected best_model_epoch_*.pth"
+                "No checkpoints found. Expected best_model_epoch_*.pth in: "
+                f"{searched_dirs}"
             )
 
         def epoch_number(path: Path) -> int:
@@ -87,7 +109,7 @@ class Evaluator:
     def _load_checkpoint(self, checkpoint_path: Path):
         logger.info(f"Loading checkpoint: {checkpoint_path}")
         state = torch.load(checkpoint_path, map_location=self.device)
-        incompatible = self.model.load_state_dict(state, strict=False)
+        incompatible = unwrap_model(self.model).load_state_dict(state, strict=False)
         if incompatible.missing_keys or incompatible.unexpected_keys:
             logger.warning(
                 "Loaded weights with missing keys: {} and unexpected keys: {}",
@@ -119,13 +141,20 @@ class Evaluator:
         subject_absolute_error = defaultdict(float)
         subject_count = defaultdict(int)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for batch in self.loader:
-                past_imu = batch["past_imu"].to(self.device)
-                future_knee = batch["future_knee"].to(self.device)
+                past_imu = batch["past_imu"].to(
+                    self.device,
+                    non_blocking=self.non_blocking_transfer,
+                )
+                future_knee = batch["future_knee"].to(
+                    self.device,
+                    non_blocking=self.non_blocking_transfer,
+                )
 
-                predictions = self.model(past_imu, task="predict")
-                errors = predictions - future_knee
+                with autocast_context(self.autocast_kwargs):
+                    predictions = self.model(past_imu, task="predict")
+                    errors = predictions - future_knee
 
                 total_squared_error += torch.sum(errors**2).item()
                 total_absolute_error += torch.sum(errors.abs()).item()

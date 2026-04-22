@@ -10,21 +10,27 @@ from tqdm import tqdm
 from src.dataloader import IMUKneeDataset
 from src.modeling.factory import build_encoder, build_loss, build_optimizer
 from src.modeling.plotting import save_train_artifacts, should_save_intermediate_epoch
-
-# Setup device
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-elif torch.cuda.is_available():
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
+from src.modeling.runtime import (
+    autocast_context,
+    build_grad_scaler,
+    configure_runtime,
+    maybe_compile_model,
+    maybe_wrap_parallel,
+    resolve_autocast_kwargs,
+    resolve_dataloader_kwargs,
+    resolve_device,
+    resolve_gradient_settings,
+    unwrap_model,
+    use_non_blocking_transfer,
+)
 
 
 class Trainer:
     def __init__(self, cfg: DictConfig, pretrained_state_dict=None, version=None):
         self.cfg = cfg
-        self.device = device
-        self.version = version
+        self.device = resolve_device(cfg)
+        self.version = version or cfg.get("version", "default")
+        configure_runtime(cfg, self.device)
 
         logger.info(f"Using device: {self.device}")
 
@@ -42,23 +48,23 @@ class Trainer:
             self.dataset, [train_size, val_size]
         )
 
-        num_workers = cfg.training.get("num_workers", min(os.cpu_count() or 1, 8))
-        persistent_workers = cfg.training.get("persistent_workers", num_workers > 0)
-        if num_workers == 0:
-            persistent_workers = False
+        loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
+        self.non_blocking_transfer = use_non_blocking_transfer(
+            cfg,
+            self.device,
+            pin_memory=loader_kwargs.get("pin_memory", False),
+        )
         self.train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
-            num_workers=num_workers,
-            persistent_workers=persistent_workers,
+            **loader_kwargs,
         )
         self.val_loader = DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            persistent_workers=persistent_workers,
+            **loader_kwargs,
         )
 
         logger.info("Initializing IMU_Intent_Encoder from cfg.model")
@@ -69,20 +75,28 @@ class Trainer:
         )
         self.model.to(self.device)
 
-        # In your train.py, before calling load_state_dict:
         if pretrained_state_dict is not None:
-            # Remove the old positional encoding from the checkpoint
-            if "positional_layer.pe" in pretrained_state_dict:
-                del pretrained_state_dict["positional_layer.pe"]
-            
-            # Now load the remaining weights (Transformer, projections, etc.)
-            self.model.load_state_dict(pretrained_state_dict, strict=False)
-            print("Loaded pretrained weights into the model (excluding positional encoding)")
-        
+            cleaned_state_dict = dict(pretrained_state_dict)
+            cleaned_state_dict.pop("positional_layer.pe", None)
+            incompatible = self.model.load_state_dict(cleaned_state_dict, strict=False)
+            if incompatible.missing_keys or incompatible.unexpected_keys:
+                logger.warning(
+                    "Loaded pretrained weights with missing keys: {} and unexpected keys: {}",
+                    incompatible.missing_keys,
+                    incompatible.unexpected_keys,
+                )
+            logger.info("Loaded pretrained weights into training model")
+
+        self.model = maybe_compile_model(self.model, cfg)
+        self.model = maybe_wrap_parallel(self.model, cfg, self.device)
+
         logger.info(f"version: {self.version}")
 
-        self.optimizer = build_optimizer(cfg, self.model.parameters())
+        self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
         self.criterion = build_loss(cfg)
+        self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
+        self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
+        self.accumulation_steps, self.clip_grad_norm = resolve_gradient_settings(cfg)
 
         self.epochs = cfg.training.epochs
         self.best_val_loss = float("inf")
@@ -96,15 +110,46 @@ class Trainer:
         for epoch in range(self.epochs):
             self.model.train()
             train_loss = 0.0
-            for batch in tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]"):
-                past_imu = batch["past_imu"].to(self.device)
-                future_knee = batch["future_knee"].to(self.device)
+            self.optimizer.zero_grad(set_to_none=True)
+            for batch_idx, batch in enumerate(
+                tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]")
+            ):
+                past_imu = batch["past_imu"].to(
+                    self.device,
+                    non_blocking=self.non_blocking_transfer,
+                )
+                future_knee = batch["future_knee"].to(
+                    self.device,
+                    non_blocking=self.non_blocking_transfer,
+                )
 
-                self.optimizer.zero_grad()
-                predictions = self.model(past_imu, task="predict")
-                loss = self.criterion(predictions, future_knee)
-                loss.backward()
-                self.optimizer.step()
+                with autocast_context(self.autocast_kwargs):
+                    predictions = self.model(past_imu, task="predict")
+                    loss = self.criterion(predictions, future_knee)
+                    loss_for_backward = loss / self.accumulation_steps
+
+                if self.scaler is not None:
+                    self.scaler.scale(loss_for_backward).backward()
+                else:
+                    loss_for_backward.backward()
+
+                should_step = ((batch_idx + 1) % self.accumulation_steps == 0) or (
+                    batch_idx + 1 == len(self.train_loader)
+                )
+                if should_step:
+                    if self.clip_grad_norm is not None:
+                        if self.scaler is not None:
+                            self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+
+                    if self.scaler is not None:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
+
+                    self.optimizer.zero_grad(set_to_none=True)
+
                 train_loss += loss.item()
 
             if len(self.train_loader) > 0:
@@ -112,13 +157,20 @@ class Trainer:
 
             self.model.eval()
             val_loss = 0.0
-            with torch.no_grad():
+            with torch.inference_mode():
                 for batch in tqdm(self.val_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Val]"):
-                    past_imu = batch["past_imu"].to(self.device)
-                    future_knee = batch["future_knee"].to(self.device)
+                    past_imu = batch["past_imu"].to(
+                        self.device,
+                        non_blocking=self.non_blocking_transfer,
+                    )
+                    future_knee = batch["future_knee"].to(
+                        self.device,
+                        non_blocking=self.non_blocking_transfer,
+                    )
 
-                    predictions = self.model(past_imu, task="predict")
-                    loss = self.criterion(predictions, future_knee)
+                    with autocast_context(self.autocast_kwargs):
+                        predictions = self.model(past_imu, task="predict")
+                        loss = self.criterion(predictions, future_knee)
                     val_loss += loss.item()
 
             if len(self.val_loader) > 0:
@@ -139,7 +191,7 @@ class Trainer:
                     f"best_model_epoch_{epoch + 1}.pth",
                 )
                 os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-                torch.save(self.model.state_dict(), checkpoint_path)
+                torch.save(unwrap_model(self.model).state_dict(), checkpoint_path)
                 logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
                 self.best_epoch = epoch + 1
                 self.best_checkpoint_path = checkpoint_path

@@ -52,8 +52,8 @@ class IMU_Intent_Encoder(nn.Module):
 
             # 2. Apply Masking FIRST (while sequence is still 125)
             if mask is not None:
-                bool_mask = mask.unsqueeze(-1).bool()
-                x = torch.where(bool_mask, self.mask_token, x)
+                expanded_mask = mask.unsqueeze(-1)
+                x = torch.where(expanded_mask, self.mask_token.to(dtype=x.dtype), x)
 
             # 3. Prepend CLS token (125 -> 126)
             cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
