@@ -6,7 +6,6 @@ class IMU_Intent_Encoder(nn.Module):
     def __init__(
         self,
         input_features,
-        seq_length,
         forecast_horizon,
         d_model,
         num_heads,
@@ -65,16 +64,16 @@ class IMU_Intent_Encoder(nn.Module):
 
             # 5. Transformer Encoder
             encoded_x = self.transformer_encoder(x)
+            
+            if task == "predict":
+                # Use only the CLS token for the regression head
+                pooled = encoded_x[:, 0, :] 
+                return self.regression_head(pooled)
 
             if task == "reconstruct":
                 # Remove the CLS token (index 0) so output is 125 again
                 # Shape: (Batch, 1:126, 64) -> (Batch, 125, 6)
                 return self.reconstruction_head(encoded_x[:, 1:, :])
-                
-            if task == "predict":
-                # Use only the CLS token for the regression head
-                pooled = encoded_x[:, 0, :] 
-                return self.regression_head(pooled)
 
             raise ValueError(f"Unknown task: {task}")
 
