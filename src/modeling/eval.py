@@ -78,7 +78,7 @@ class Evaluator:
         checkpoint_dirs = []
         if self.version:
             checkpoint_dirs.append(base_checkpoints_dir / str(self.version))
-            checkpoint_dirs.append(base_checkpoints_dir / f"version_{self.version}")
+            checkpoint_dirs.append(base_checkpoints_dir / f"{self.version}")
         checkpoint_dirs.append(base_checkpoints_dir)
 
         candidates = []

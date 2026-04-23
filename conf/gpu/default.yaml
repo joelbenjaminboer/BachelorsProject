@@ -3,12 +3,12 @@ device: auto
 deterministic: false
 
 autocast:
-  enabled: auto
-  dtype: float16
+  enabled: true
+  dtype: bfloat16
 
 compile:
-  enabled: false
-  mode: reduce-overhead
+  enabled: true
+  mode: max-autotune
   fullgraph: false
   dynamic: false
   backend: null
