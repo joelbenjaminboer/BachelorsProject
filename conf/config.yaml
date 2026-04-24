@@ -7,4 +7,4 @@ defaults:
   - plotting: default
   - _self_
 
-version: dim128-long-pretrain
+version: long-pretrain-v2

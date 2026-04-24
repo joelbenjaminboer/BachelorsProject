@@ -13,69 +13,71 @@ class IMU_Intent_Encoder(nn.Module):
         dim_feedforward,
         positional_encoding_max_len,
         positional_encoding_base,
+        dropout=0.1
     ):
         super(IMU_Intent_Encoder, self).__init__()
-        # Project the 6 IMU features into a larger dimension
         self.input_projection = nn.Linear(input_features, d_model)
-        
-        # Learnable CLS token for pooling
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
-        # Positional encoding layer
         self.positional_layer = PositionalEncoding(
             d_model=d_model,
             max_len=positional_encoding_max_len,
             base=positional_encoding_base,
         )
+        
+        # Added dropout after positional encoding
+        self.pos_drop = nn.Dropout(p=dropout) 
 
-        # Setup the Transformer Encoder layers
-        # batch_first=True makes our shapes (Batch, Seq, Features)
+        # FIX 1: Set norm_first=True for Pre-Norm stability
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=num_heads, batch_first=True, dim_feedforward=dim_feedforward
+            d_model=d_model, 
+            nhead=num_heads, 
+            batch_first=True, 
+            dim_feedforward=dim_feedforward,
+            norm_first=True, 
+            dropout=dropout
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # Pretraining: Mask Token and Reconstruction Head
+        # FIX 2: Final LayerNorm before the heads
+        self.norm = nn.LayerNorm(d_model)
+
         self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
         self.reconstruction_head = nn.Linear(d_model, input_features)
 
-        # Downstream prediction: Regression Head
         self.regression_head = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
             nn.ReLU(),
+            nn.Dropout(dropout), # Good practice in the MLP head
             nn.Linear(dim_feedforward, forecast_horizon),
         )
 
     def forward(self, x, mask=None, task="reconstruct"):
-            # 1. Project: (Batch, 125, 6) -> (Batch, 125, 64)
-            x = self.input_projection(x)
+        x = self.input_projection(x)
 
-            # 2. Apply Masking FIRST (while sequence is still 125)
-            if mask is not None:
-                expanded_mask = mask.unsqueeze(-1)
-                x = torch.where(expanded_mask, self.mask_token.to(dtype=x.dtype), x)
+        if mask is not None:
+            expanded_mask = mask.unsqueeze(-1)
+            x = torch.where(expanded_mask, self.mask_token.to(dtype=x.dtype), x)
 
-            # 3. Prepend CLS token (125 -> 126)
-            cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
-            x = torch.cat((cls_tokens, x), dim=1) 
+        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1) 
 
-            # 4. Positional Encoding
-            x = self.positional_layer(x)
+        x = self.positional_layer(x)
+        x = self.pos_drop(x) # Apply dropout
 
-            # 5. Transformer Encoder
-            encoded_x = self.transformer_encoder(x)
-            
-            if task == "predict":
-                # Use only the CLS token for the regression head
-                pooled = encoded_x[:, 0, :] 
-                return self.regression_head(pooled)
+        encoded_x = self.transformer_encoder(x)
+        
+        # Apply final LayerNorm
+        encoded_x = self.norm(encoded_x)
+        
+        if task == "predict":
+            pooled = encoded_x[:, 0, :] 
+            return self.regression_head(pooled)
 
-            if task == "reconstruct":
-                # Remove the CLS token (index 0) so output is 125 again
-                # Shape: (Batch, 1:126, 64) -> (Batch, 125, 6)
-                return self.reconstruction_head(encoded_x[:, 1:, :])
+        if task == "reconstruct":
+            return self.reconstruction_head(encoded_x[:, 1:, :])
 
-            raise ValueError(f"Unknown task: {task}")
+        raise ValueError(f"Unknown task: {task}")
 
 
 class PositionalEncoding(nn.Module):
