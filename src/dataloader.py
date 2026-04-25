@@ -5,15 +5,13 @@ from typing import Optional, Sequence
 
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset
 
 IMU_COLS = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
-
 
 def _seed_worker(worker_id: int):
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
-
 
 def _normalize_subjects(subjects: Optional[Sequence[str]]) -> list[str]:
     if subjects is None:
@@ -31,7 +29,6 @@ def _normalize_subjects(subjects: Optional[Sequence[str]]) -> list[str]:
 
     return sorted(set(normalized))
 
-
 def _subjects_from_dataset(dataset) -> list[str]:
     if dataset is None:
         return []
@@ -46,7 +43,6 @@ def _subjects_from_dataset(dataset) -> list[str]:
         return sorted(set(dataset.window_subject_ids))
 
     return []
-
 
 class IMUKneeDataset(Dataset):
     def __init__(
@@ -69,6 +65,10 @@ class IMUKneeDataset(Dataset):
         self.valid_indices: list[tuple[int, int]] = []
         self.window_subject_ids: list[str] = []
         self.window_start_indices: list[int] = []
+        
+        # Statistics for standardization
+        self.imu_mean: Optional[torch.Tensor] = None
+        self.imu_std: Optional[torch.Tensor] = None
 
         self.load_data(data_dir)
 
@@ -114,6 +114,11 @@ class IMUKneeDataset(Dataset):
         seq_idx, start_idx = self.valid_indices[idx]
 
         past_imu = self.imu_sequences[seq_idx][start_idx : start_idx + self.seq_length]
+        
+        # Apply standardization dynamically if stats exist
+        if self.imu_mean is not None and self.imu_std is not None:
+            past_imu = (past_imu - self.imu_mean) / self.imu_std
+            
         target_idx = start_idx + self.seq_length
         future_knee = self.knee_sequences[seq_idx][target_idx : target_idx + self.forecast_horizon]
 
@@ -124,6 +129,25 @@ class IMUKneeDataset(Dataset):
             "window_start_idx": self.window_start_indices[idx],
         }
 
+def _compute_train_imu_stats(train_dataset: Dataset, batch_size: int = 1024):
+    """Calculates Z-score statistics over the training subset only."""
+    loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    
+    sums = torch.zeros(6)
+    sq_sums = torch.zeros(6)
+    count = 0
+
+    for batch in loader:
+        imu = batch["past_imu"]  
+        sums += imu.sum(dim=(0, 1))
+        sq_sums += (imu ** 2).sum(dim=(0, 1))
+        count += imu.shape[0] * imu.shape[1]
+
+    mean = sums / count
+    std = torch.sqrt((sq_sums / count) - (mean ** 2))
+    std = torch.clamp(std, min=1e-8)  
+    
+    return mean, std
 
 def build_pretrain_dataloaders(
     data_dir: str,
@@ -167,15 +191,25 @@ def build_pretrain_dataloaders(
     else:
         train_ratio = min(max(float(split_ratio), 0.0), 1.0)
         train_size = int(train_ratio * len(train_val_dataset))
-        train_size = max(1, min(train_size, len(train_val_dataset) - 1))
-        val_size = len(train_val_dataset) - train_size
+        
+        if train_size < 1 or train_size >= len(train_val_dataset):
+            train_size = max(1, min(train_size, len(train_val_dataset) - 1))
 
-        generator = torch.Generator().manual_seed(seed)
-        train_dataset, val_dataset = random_split(
-            train_val_dataset,
-            [train_size, val_size],
-            generator=generator,
-        )
+        buffer_size = train_val_dataset.window_size 
+        
+        if train_size + buffer_size >= len(train_val_dataset):
+            buffer_size = 0 
+            
+        train_indices = list(range(0, train_size))
+        val_indices = list(range(train_size + buffer_size, len(train_val_dataset)))
+
+        train_dataset = Subset(train_val_dataset, train_indices)
+        val_dataset = Subset(train_val_dataset, val_indices)
+
+    print("Computing IMU standard scaling from the training subset...")
+    imu_mean, imu_std = _compute_train_imu_stats(train_dataset)
+    train_val_dataset.imu_mean = imu_mean
+    train_val_dataset.imu_std = imu_std
 
     test_dataset = None
     if include_test_loader and holdout_subjects:
@@ -185,10 +219,8 @@ def build_pretrain_dataloaders(
             forecast_horizon=forecast_horizon,
             include_subjects=holdout_subjects,
         )
-        if len(test_dataset) == 0:
-            raise ValueError(
-                "No test samples found for holdout subjects: " + ", ".join(holdout_subjects)
-            )
+        test_dataset.imu_mean = imu_mean
+        test_dataset.imu_std = imu_std
 
     if num_workers is None:
         num_workers = min(os.cpu_count() or 1, 8)
@@ -220,6 +252,7 @@ def build_pretrain_dataloaders(
         generator=train_loader_generator,
         **common_loader_kwargs,
     )
+    
     val_loader = DataLoader(
         val_dataset,
         shuffle=False,
