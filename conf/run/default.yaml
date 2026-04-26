@@ -1,5 +1,5 @@
 download: false
 preprocess: false
-pretrain: true
-train: false
-eval: false
+pretrain: false
+train: true
+eval: true
