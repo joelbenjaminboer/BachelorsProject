@@ -33,23 +33,13 @@ def main(cfg: DictConfig):
                 logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
     
     if run_cfg.get("train", False):
-        if pretrained_state_dict is None:
-            pretrain_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints" / "pretrain" / f"{version}"
-            candidates = sorted(pretrain_dir.glob("best_pretrained_epoch_*.pth"))
-
-            def epoch_number(path: Path) -> int:
-                name = path.stem
-                try:
-                    return int(name.split("best_pretrained_epoch_")[-1])
-                except ValueError:
-                    return -1
-
-            if candidates:
-                best_pretrained = max(candidates, key=lambda p: (epoch_number(p), p.stat().st_mtime))
-                pretrained_state_dict = torch.load(best_pretrained, map_location="cpu")
-                logger.info(f"Loaded pretrained weights from {best_pretrained}")
+        if run_cfg.get("load_checkpoint", False) and pretrained_state_dict is None:
+            checkpoint_path = Path(run_cfg.get("checkpoint_path", ""))
+            if checkpoint_path.exists():
+                pretrained_state_dict = torch.load(checkpoint_path, map_location="cpu")
+                logger.info(f"Loaded pretrained weights from {checkpoint_path}")
             else:
-                logger.warning(f"No pretrained checkpoints found in {pretrain_dir}")
+                logger.warning(f"Checkpoint not found: {checkpoint_path}. Starting training from scratch.")
 
         run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
 

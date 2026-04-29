@@ -3,3 +3,6 @@ preprocess: false
 pretrain: false
 train: true
 eval: true
+
+load_checkpoint: false
+checkpoint_path: "checkpoints/pretrain/long-pretrain+znormalize/best_pretrained_epoch_4.pth"
