@@ -38,10 +38,12 @@ def plot_overall_histograms(df_all: pd.DataFrame, out_dir: Path) -> None:
 def plot_per_subject_kde(df_all: pd.DataFrame, channel: str, out_dir: Path) -> None:
     # Sub-sample per subject to keep KDE estimation fast
     sample_per_subject = min(50_000, df_all.groupby("subject").size().min())
-    sampled = (
-        df_all.groupby("subject", group_keys=False)
-        .apply(lambda g: g.sample(n=sample_per_subject, random_state=42))
-    )
+    frames = []
+    for s in SUBJECTS:
+        subj = df_all[df_all["subject"] == s]
+        if len(subj) > 0:
+            frames.append(subj.sample(n=min(sample_per_subject, len(subj)), random_state=42))
+    sampled = pd.concat(frames, ignore_index=True)
     fig, ax = plt.subplots(figsize=(12, 6))
     for subject in SUBJECTS:
         data = sampled.loc[sampled["subject"] == subject, channel]

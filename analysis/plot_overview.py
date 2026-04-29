@@ -41,9 +41,11 @@ def plot_recording_length_dist(file_stats: pd.DataFrame, out_dir: Path) -> None:
         data=file_stats,
         x="subject",
         y="n_rows",
+        hue="subject",
         order=SUBJECTS,
         palette=SUBJECT_PALETTE,
         inner="box",
+        legend=False,
         ax=ax,
     )
     ax.set_xlabel("Subject")

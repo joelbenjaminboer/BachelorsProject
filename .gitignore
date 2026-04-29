@@ -5,6 +5,7 @@ multirun/
 # Data
 /data/
 models/
+reports/figures
 *.log
 
 # Mac OS-specific storage files
