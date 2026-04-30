@@ -28,7 +28,7 @@ class IMU_Intent_Encoder(nn.Module):
         # Added dropout after positional encoding
         self.pos_drop = nn.Dropout(p=dropout) 
 
-        # FIX 1: Set norm_first=True for Pre-Norm stability
+        # Set norm_first=True for Pre-Norm stability
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, 
             nhead=num_heads, 
@@ -39,7 +39,7 @@ class IMU_Intent_Encoder(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # FIX 2: Final LayerNorm before the heads
+        # Final LayerNorm before the heads
         self.norm = nn.LayerNorm(d_model)
 
         self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
@@ -63,15 +63,14 @@ class IMU_Intent_Encoder(nn.Module):
         x = torch.cat((cls_tokens, x), dim=1) 
 
         x = self.positional_layer(x)
-        x = self.pos_drop(x) # Apply dropout
+        x = self.pos_drop(x)
 
         encoded_x = self.transformer_encoder(x)
-        
-        # Apply final LayerNorm
+
         encoded_x = self.norm(encoded_x)
         
         if task == "predict":
-            pooled = encoded_x[:, 0, :] 
+            pooled = encoded_x[:, 0, :]
             return self.regression_head(pooled)
 
         if task == "reconstruct":
@@ -90,7 +89,7 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # Shape: (1, max_len, d_model)
+        pe = pe.unsqueeze(0)
         self.register_buffer("pe", pe)
 
     def forward(self, x):

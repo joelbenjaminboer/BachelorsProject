@@ -1,4 +1,5 @@
 from collections import defaultdict
+import os
 from pathlib import Path
 
 import hydra
@@ -7,7 +8,7 @@ from omegaconf import DictConfig
 import torch
 from torch.utils.data import DataLoader
 
-from src.dataloader import IMUKneeDataset
+from src.dataloader import build_pretrain_dataloaders
 from src.modeling.factory import build_encoder
 from src.modeling.plotting import save_eval_artifacts
 from src.modeling.runtime import (
@@ -38,18 +39,12 @@ class Evaluator:
         self.processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
         self.holdout_subjects = cfg.training.get("holdout_subjects", [])
 
+        # Use the holdout subject's fold directory
         if not self.holdout_subjects:
             raise ValueError("Eval requires held-out subjects in training.holdout_subjects")
 
-        self.dataset = IMUKneeDataset(
-            self.processed_dir,
-            self.seq_length,
-            self.forecast_horizon,
-            include_subjects=self.holdout_subjects,
-        )
-
-        if len(self.dataset) == 0:
-            raise ValueError("No samples found for held-out subjects")
+        holdout = self.holdout_subjects[0]
+        fold_dir = os.path.join(self.processed_dir, f"fold_{holdout}")
 
         loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
         self.non_blocking_transfer = use_non_blocking_transfer(
@@ -57,12 +52,16 @@ class Evaluator:
             self.device,
             pin_memory=loader_kwargs.get("pin_memory", False),
         )
-        self.loader = DataLoader(
-            self.dataset,
+        
+        _, _, self.loader, self.split_info = build_pretrain_dataloaders(
+            data_dir=fold_dir,
             batch_size=self.batch_size,
-            shuffle=False,
-            **loader_kwargs,
+            seed=cfg.training.get("split_seed", 42),
+            **loader_kwargs
         )
+        
+        if len(self.loader.dataset) == 0:
+            raise ValueError("No samples found for held-out subjects")
 
         self.model = build_encoder(
             cfg=cfg,

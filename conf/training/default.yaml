@@ -1,4 +1,4 @@
-epochs: 50
+epochs: 5
 batch_size: 64
 num_workers: null
 persistent_workers: null

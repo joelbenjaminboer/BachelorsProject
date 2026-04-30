@@ -1,6 +1,6 @@
 download: false
 preprocess: false
-pretrain: false
+pretrain: true
 train: true
 eval: true
 

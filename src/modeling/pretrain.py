@@ -150,7 +150,8 @@ class Pretrainer:
         self.split_strategy = cfg.training.get("split_strategy", "loso")
         self.holdout_subjects = cfg.training.get("holdout_subjects", [])
         self.split_seed = cfg.training.get("split_seed", 42)
-        self.processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
+        base_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
+        self.processed_dir = os.path.join(base_dir, f"fold_{self.holdout_subjects[0]}") if self.holdout_subjects else base_dir
 
         loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
         self.non_blocking_transfer = use_non_blocking_transfer(
@@ -180,20 +181,22 @@ class Pretrainer:
         )
 
         logger.info(
-            f"Split strategy: {self.split_info['split_strategy']} | "
+            f"Split strategy: {self.split_strategy} | "
             f"held-out subjects: {', '.join(self.holdout_subjects) or 'None'}"
         )
         logger.info(
             f"Samples - train: {self.split_info['train_samples']}, "
             f"val: {self.split_info['val_samples']}"
         )
+        train_subjects = self.split_info.get('train_subjects', [])
+        val_subjects = self.split_info.get('val_subjects', [])
         logger.info(
-            f"Train subjects ({len(self.split_info['train_subjects'])}): "
-            f"{', '.join(self.split_info['train_subjects']) or 'None'}"
+            f"Train subjects ({len(train_subjects)}): "
+            f"{', '.join(train_subjects) or 'None'}"
         )
         logger.info(
-            f"Val subjects ({len(self.split_info['val_subjects'])}): "
-            f"{', '.join(self.split_info['val_subjects']) or 'None'}"
+            f"Val subjects ({len(val_subjects)}): "
+            f"{', '.join(val_subjects) or 'None'}"
         )
 
         self.model = build_encoder(

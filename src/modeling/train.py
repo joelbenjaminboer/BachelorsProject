@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.dataloader import IMUKneeDataset
+from src.dataloader import build_pretrain_dataloaders
 from src.modeling.factory import build_encoder, build_loss, build_optimizer
 from src.modeling.plotting import save_train_artifacts, should_save_intermediate_epoch
 from src.modeling.runtime import (
@@ -39,32 +39,21 @@ class Trainer:
         self.batch_size = cfg.training.batch_size
         self.processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
 
-        self.dataset = IMUKneeDataset(self.processed_dir, self.seq_length, self.forecast_horizon)
-        logger.info(f"Total samples: {len(self.dataset)}")
-
-        train_size = int(cfg.training.split_ratio * len(self.dataset))
-        val_size = len(self.dataset) - train_size
-        self.train_dataset, self.val_dataset = torch.utils.data.random_split(
-            self.dataset, [train_size, val_size]
-        )
-
         loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
         self.non_blocking_transfer = use_non_blocking_transfer(
             cfg,
             self.device,
             pin_memory=loader_kwargs.get("pin_memory", False),
         )
-        self.train_loader = DataLoader(
-            self.train_dataset,
+        
+        # Use the holdout subject's fold directory
+        holdout = cfg.training.get("holdout_subjects", ["AB156"])[0] 
+        fold_dir = os.path.join(self.processed_dir, f"fold_{holdout}")
+        self.train_loader, self.val_loader, _, self.split_info = build_pretrain_dataloaders(
+            data_dir=fold_dir,
             batch_size=self.batch_size,
-            shuffle=True,
-            **loader_kwargs,
-        )
-        self.val_loader = DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            **loader_kwargs,
+            seed=cfg.training.get("split_seed", 42),
+            **loader_kwargs
         )
 
         logger.info("Initializing IMU_Intent_Encoder from cfg.model")
