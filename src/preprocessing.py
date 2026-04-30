@@ -76,7 +76,7 @@ class IMUPreprocessor:
         for i in range(len(X) - self.window_size - self.horizon):
             Xw.append(X[i:i + self.window_size])
             # Target is the value at horizon after the window
-            yw.append(y[i + self.window_size + self.horizon - 1])
+            yw.append(y[i + self.window_size: i + self.window_size + self.horizon, 0])
         return np.array(Xw), np.array(yw)
 
     def run(self, output_dir):
