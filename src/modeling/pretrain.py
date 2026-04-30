@@ -166,13 +166,7 @@ class Pretrainer:
             self.split_info,
         ) = build_pretrain_dataloaders(
             data_dir=self.processed_dir,
-            seq_length=self.seq_length,
-            forecast_horizon=self.forecast_horizon,
             batch_size=self.batch_size,
-            split_ratio=self.split_ratio,
-            split_strategy=self.split_strategy,
-            holdout_subjects=self.holdout_subjects,
-            include_test_loader=False,
             seed=self.split_seed,
             num_workers=loader_kwargs.get("num_workers"),
             persistent_workers=loader_kwargs.get("persistent_workers"),

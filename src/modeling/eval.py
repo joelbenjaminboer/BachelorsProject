@@ -6,7 +6,6 @@ import hydra
 from loguru import logger
 from omegaconf import DictConfig
 import torch
-from torch.utils.data import DataLoader
 
 from src.dataloader import build_pretrain_dataloaders
 from src.modeling.factory import build_encoder

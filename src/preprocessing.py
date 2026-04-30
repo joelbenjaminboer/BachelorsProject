@@ -105,7 +105,7 @@ class IMUPreprocessor:
                             Xw_trials.append(Xw)
                             yw_trials.append(yw)
                     except Exception as e:
-                        pass
+                        logger.warning(f"Skipped {f}: {e}")
                 
                 if Xw_trials:
                     subject_data[subj_id] = (Xw_trials, yw_trials)

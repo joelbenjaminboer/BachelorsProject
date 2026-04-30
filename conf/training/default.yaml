@@ -9,8 +9,8 @@ split_ratio: 0.9  # 90/10 train/val split
 split_strategy: "loso"
 holdout_subjects: ["AB194"]
 split_seed: 42
-context_length: 125
-forecast_horizon: 50
+context_length: 25
+forecast_horizon: 10
 
 mask_block_min_len: 10
 mask_block_max_len: 20

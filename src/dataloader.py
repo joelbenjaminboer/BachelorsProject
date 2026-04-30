@@ -1,15 +1,19 @@
+import bisect
 import os
 import random
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Optional
 
 import h5py
 import torch
+from loguru import logger
 from torch.utils.data import DataLoader, Dataset
+
 
 def _seed_worker(worker_id: int):
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
+
 
 class HDF5KneeDataset(Dataset):
     def __init__(self, X: list[torch.Tensor], y: list[torch.Tensor], imu_mean=None, imu_std=None):
@@ -17,8 +21,7 @@ class HDF5KneeDataset(Dataset):
         self.y = y
         self.imu_mean = imu_mean
         self.imu_std = imu_std
-        
-        # Flattens sizes since we get lists of trial tensors
+
         self.total_samples = 0
         self.cumulative_sizes = []
         for x_arr in self.X:
@@ -29,23 +32,16 @@ class HDF5KneeDataset(Dataset):
         return self.total_samples
 
     def __getitem__(self, idx):
-        # Binary search or simple linear scan for the right trial
-        # For simplicity, a small loop (max 40 * subjects)
-        trial_idx = 0
-        for i, size in enumerate(self.cumulative_sizes):
-            if idx < size:
-                trial_idx = i
-                break
-        
-        # Calculate local index within the trial
+        trial_idx = bisect.bisect_left(self.cumulative_sizes, idx + 1)
+
         if trial_idx == 0:
             local_idx = idx
         else:
             local_idx = idx - self.cumulative_sizes[trial_idx - 1]
-            
+
         past_imu = self.X[trial_idx][local_idx].float()
         future_knee = self.y[trial_idx][local_idx].float()
-        
+
         if self.imu_mean is not None and self.imu_std is not None:
             past_imu = (past_imu - self.imu_mean) / self.imu_std
 
@@ -53,6 +49,7 @@ class HDF5KneeDataset(Dataset):
             "past_imu": past_imu,
             "future_knee": future_knee
         }
+
 
 def load_trials_from_hdf5(filepath: str):
     with h5py.File(filepath, 'r') as f:
@@ -72,29 +69,28 @@ def load_trials_from_hdf5(filepath: str):
         X_test, y_test = load_group('test')
         return X_train, y_train, X_val, y_val, X_test, y_test
 
+
 def _compute_train_imu_stats(X_train: list[torch.Tensor]):
     """Calculates Z-score statistics over the training subset only."""
     count = sum(x.numel() for x in X_train)
     if count == 0:
         return torch.zeros(6), torch.ones(6)
 
-    # Flatten list of 3D tensors (trials, seq_len, 6) or (samples, seq_len, 6)
-    # Actually, X_train is list of (num_windows, seq_len, 6) arrays
-    # Concat along dimension 0 and compute stats
-    all_x = torch.cat(X_train, dim=0) # [total_windows, seq_len, 6]
+    all_x = torch.cat(X_train, dim=0)  # [total_windows, seq_len, 6]
     mean = all_x.mean(dim=(0, 1))
     std = all_x.std(dim=(0, 1))
     std = torch.clamp(std, min=1e-8)
     return mean.float(), std.float()
 
+
 def build_pretrain_dataloaders(
-    data_dir: str, # This should now point to a specific fold directory, e.g. processed_dir/fold_1
+    data_dir: str,
     batch_size: int,
     seed: int = 42,
     num_workers: Optional[int] = None,
     persistent_workers: Optional[bool] = None,
     pin_memory: Optional[bool] = None,
-    **kwargs # Accept unused args for compatibility
+    prefetch_factor: Optional[int] = None,
 ):
     data_file = Path(data_dir) / "data.h5"
     if not data_file.exists():
@@ -102,7 +98,7 @@ def build_pretrain_dataloaders(
 
     X_train, y_train, X_val, y_val, X_test, y_test = load_trials_from_hdf5(str(data_file))
 
-    print("Computing IMU standard scaling from the training subset...")
+    logger.info("Computing IMU standard scaling from training subset")
     imu_mean, imu_std = _compute_train_imu_stats(X_train)
 
     train_dataset = HDF5KneeDataset(X_train, y_train, imu_mean, imu_std)
@@ -127,6 +123,9 @@ def build_pretrain_dataloaders(
         "pin_memory": bool(pin_memory),
         "worker_init_fn": _seed_worker if num_workers > 0 else None,
     }
+
+    if num_workers > 0 and prefetch_factor is not None:
+        common_loader_kwargs["prefetch_factor"] = prefetch_factor
 
     train_loader_generator = torch.Generator().manual_seed(seed)
 

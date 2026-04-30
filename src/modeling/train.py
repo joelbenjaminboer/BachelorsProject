@@ -4,7 +4,6 @@ import hydra
 from loguru import logger
 from omegaconf import DictConfig
 import torch
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
@@ -204,10 +203,12 @@ class Trainer:
             tag="final",
         )
 
+        return self.best_checkpoint_path
+
 
 def run_train(cfg: DictConfig, pretrained_state_dict=None, version=None):
     trainer = Trainer(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
-    trainer.run()
+    return trainer.run()
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)
