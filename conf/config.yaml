@@ -7,4 +7,4 @@ defaults:
   - plotting: default
   - _self_
 
-version: long-pretrain-v2
+version: "Freq500"
