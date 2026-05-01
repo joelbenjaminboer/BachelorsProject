@@ -102,11 +102,11 @@ class Trainer:
 
         if freeze_epochs > 0:
             self._set_encoder_grad(False)
-            self.optimizer = build_optimizer(
-                self.cfg,
-                [p for p in self.model.parameters() if p.requires_grad],
-                device=self.device,
-            )
+            head_params = [
+                p for name, p in unwrap_model(self.model).named_parameters()
+                if name.startswith("regression_head")
+            ]
+            self.optimizer = build_optimizer(self.cfg, head_params, device=self.device)
             self.scheduler = build_scheduler(self.cfg, self.optimizer)
             logger.info(
                 f"Phase 1: encoder frozen, training regression head for {freeze_epochs} epoch(s)"
