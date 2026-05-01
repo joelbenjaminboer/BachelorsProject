@@ -7,4 +7,4 @@ defaults:
   - plotting: default
   - _self_
 
-version: "Freq500"
+version: "FreezeEncoderTest"

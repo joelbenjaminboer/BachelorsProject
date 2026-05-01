@@ -6,6 +6,7 @@ import hydra
 from loguru import logger
 from omegaconf import DictConfig
 import torch
+from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
 from src.modeling.factory import build_encoder
@@ -13,7 +14,6 @@ from src.modeling.plotting import save_eval_artifacts
 from src.modeling.runtime import (
     autocast_context,
     configure_runtime,
-    maybe_compile_model,
     maybe_wrap_parallel,
     resolve_autocast_kwargs,
     resolve_dataloader_kwargs,
@@ -68,7 +68,7 @@ class Evaluator:
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
         ).to(self.device)
-        self.model = maybe_compile_model(self.model, cfg)
+
         self.model = maybe_wrap_parallel(self.model, cfg, self.device)
 
     def _find_best_checkpoint(self) -> Path:
@@ -144,7 +144,7 @@ class Evaluator:
         y_std = self.split_info.get("y_std")
 
         with torch.inference_mode():
-            for batch in self.loader:
+            for batch in tqdm(self.loader, desc="Eval"):
                 past_imu = batch["past_imu"].to(
                     self.device,
                     non_blocking=self.non_blocking_transfer,

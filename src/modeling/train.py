@@ -92,11 +92,37 @@ class Trainer:
         self.best_epoch = None
         self.best_checkpoint_path = None
 
+    def _set_encoder_grad(self, requires_grad: bool):
+        for name, param in unwrap_model(self.model).named_parameters():
+            if not name.startswith("regression_head"):
+                param.requires_grad_(requires_grad)
+
     def run(self):
+        freeze_epochs = self.cfg.training.get("freeze_encoder_epochs", 0)
+
+        if freeze_epochs > 0:
+            self._set_encoder_grad(False)
+            self.optimizer = build_optimizer(
+                self.cfg,
+                [p for p in self.model.parameters() if p.requires_grad],
+                device=self.device,
+            )
+            self.scheduler = build_scheduler(self.cfg, self.optimizer)
+            logger.info(
+                f"Phase 1: encoder frozen, training regression head for {freeze_epochs} epoch(s)"
+            )
+
         train_loss_history = []
         val_loss_history = []
 
         for epoch in range(self.epochs):
+            if freeze_epochs > 0 and epoch == freeze_epochs:
+                self._set_encoder_grad(True)
+                self.optimizer = build_optimizer(
+                    self.cfg, self.model.parameters(), device=self.device
+                )
+                self.scheduler = build_scheduler(self.cfg, self.optimizer)
+                logger.info("Phase 2: full model fine-tuning")
             self.model.train()
             train_loss = 0.0
             self.optimizer.zero_grad(set_to_none=True)
