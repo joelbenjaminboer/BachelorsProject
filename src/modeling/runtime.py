@@ -210,6 +210,11 @@ def maybe_wrap_parallel(model, cfg: DictConfig, device: torch.device):
 
 
 def unwrap_model(model):
-    if isinstance(model, torch.nn.DataParallel):
-        return model.module
+    while True:
+        if isinstance(model, torch.nn.DataParallel):
+            model = model.module
+        elif hasattr(model, "_orig_mod"):  # torch.compile wrapper
+            model = model._orig_mod
+        else:
+            break
     return model
