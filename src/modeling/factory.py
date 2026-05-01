@@ -53,6 +53,22 @@ def build_optimizer(cfg: DictConfig, parameters, device: torch.device | None = N
     raise ValueError(f"Unsupported optimizer '{optimizer_cfg.name}'")
 
 
+def build_scheduler(cfg: DictConfig, optimizer):
+    sched_cfg = cfg.model.get("scheduler", None)
+    if sched_cfg is None:
+        return None
+    name = str(sched_cfg.name).lower()
+    if name == "reduce_on_plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=float(sched_cfg.factor),
+            patience=int(sched_cfg.patience),
+            min_lr=float(sched_cfg.min_lr),
+        )
+    raise ValueError(f"Unsupported scheduler '{sched_cfg.name}'")
+
+
 def build_loss(cfg: DictConfig):
     loss_cfg = cfg.model.loss
     loss_name = str(loss_cfg.name).lower()

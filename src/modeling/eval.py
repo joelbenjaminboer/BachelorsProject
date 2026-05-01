@@ -24,12 +24,13 @@ from src.modeling.runtime import (
 
 
 class Evaluator:
-    def __init__(self, cfg: DictConfig, version=None):
+    def __init__(self, cfg: DictConfig, version=None, checkpoint_path=None):
         self.cfg = cfg
         self.device = resolve_device(cfg)
         self.version = version or cfg.get("version", "default")
         configure_runtime(cfg, self.device)
         self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
+        self.explicit_checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
         logger.info(f"Using device: {self.device} for Evaluation")
         logger.info(f"Evaluation version: {self.version}")
         self.seq_length = cfg.training.context_length
@@ -116,7 +117,7 @@ class Evaluator:
             )
 
     def run(self):
-        checkpoint_path = self._find_best_checkpoint()
+        checkpoint_path = self.explicit_checkpoint_path or self._find_best_checkpoint()
         self._load_checkpoint(checkpoint_path)
 
         self.model.eval()
@@ -139,6 +140,9 @@ class Evaluator:
         subject_absolute_error = defaultdict(float)
         subject_count = defaultdict(int)
 
+        y_mean = self.split_info.get("y_mean")
+        y_std = self.split_info.get("y_std")
+
         with torch.inference_mode():
             for batch in self.loader:
                 past_imu = batch["past_imu"].to(
@@ -152,7 +156,12 @@ class Evaluator:
 
                 with autocast_context(self.autocast_kwargs):
                     predictions = self.model(past_imu, task="predict")
-                    errors = predictions - future_knee
+
+                if y_mean is not None and y_std is not None:
+                    predictions = predictions * y_std + y_mean
+                    future_knee = future_knee * y_std + y_mean
+
+                errors = predictions - future_knee
 
                 total_squared_error += torch.sum(errors**2).item()
                 total_absolute_error += torch.sum(errors.abs()).item()
@@ -248,8 +257,8 @@ class Evaluator:
         }
 
 
-def run_eval(cfg: DictConfig, version=None):
-    evaluator = Evaluator(cfg, version=version)
+def run_eval(cfg: DictConfig, version=None, checkpoint_path=None):
+    evaluator = Evaluator(cfg, version=version, checkpoint_path=checkpoint_path)
     return evaluator.run()
 
 

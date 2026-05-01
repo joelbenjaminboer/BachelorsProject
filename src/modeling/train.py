@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
-from src.modeling.factory import build_encoder, build_loss, build_optimizer
+from src.modeling.factory import build_encoder, build_loss, build_optimizer, build_scheduler
 from src.modeling.plotting import save_train_artifacts, should_save_intermediate_epoch
 from src.modeling.runtime import (
     autocast_context,
@@ -81,6 +81,7 @@ class Trainer:
         logger.info(f"version: {self.version}")
 
         self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
+        self.scheduler = build_scheduler(cfg, self.optimizer)
         self.criterion = build_loss(cfg)
         self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
         self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
@@ -163,9 +164,13 @@ class Trainer:
 
             if len(self.val_loader) > 0:
                 val_loss /= len(self.val_loader)
+            if self.scheduler is not None:
+                self.scheduler.step(val_loss)
+
+            current_lr = self.optimizer.param_groups[0]["lr"]
             logger.info(
                 f"Epoch {epoch + 1}/{self.epochs} - Train Loss: {train_loss:.4f} - "
-                f"Val Loss: {val_loss:.4f}"
+                f"Val Loss: {val_loss:.4f} - LR: {current_lr:.2e}"
             )
 
             train_loss_history.append(float(train_loss))

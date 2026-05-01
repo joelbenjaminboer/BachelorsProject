@@ -15,6 +15,7 @@ import torch
 def main(cfg: DictConfig):
     run_cfg = cfg.get("run", {})
     pretrained_state_dict = None
+    best_checkpoint_path = None
     version = cfg.get("version", "0.1.0")
 
     if run_cfg.get("download", False):
@@ -41,10 +42,10 @@ def main(cfg: DictConfig):
             else:
                 logger.warning(f"Checkpoint not found: {checkpoint_path}. Starting training from scratch.")
 
-        run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
+        best_checkpoint_path = run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
 
     if run_cfg.get("eval", False):
-        run_eval(cfg, version=version)
+        run_eval(cfg, version=version, checkpoint_path=best_checkpoint_path)
 
 
 if __name__ == "__main__":

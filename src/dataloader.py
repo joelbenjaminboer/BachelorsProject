@@ -16,11 +16,13 @@ def _seed_worker(worker_id: int):
 
 
 class HDF5KneeDataset(Dataset):
-    def __init__(self, X: list[torch.Tensor], y: list[torch.Tensor], imu_mean=None, imu_std=None):
+    def __init__(self, X: list[torch.Tensor], y: list[torch.Tensor], imu_mean=None, imu_std=None, y_mean=None, y_std=None):
         self.X = X
         self.y = y
         self.imu_mean = imu_mean
         self.imu_std = imu_std
+        self.y_mean = y_mean
+        self.y_std = y_std
 
         self.total_samples = 0
         self.cumulative_sizes = []
@@ -45,6 +47,9 @@ class HDF5KneeDataset(Dataset):
         if self.imu_mean is not None and self.imu_std is not None:
             past_imu = (past_imu - self.imu_mean) / self.imu_std
 
+        if self.y_mean is not None and self.y_std is not None:
+            future_knee = (future_knee - self.y_mean) / self.y_std
+
         return {
             "past_imu": past_imu,
             "future_knee": future_knee
@@ -68,6 +73,15 @@ def load_trials_from_hdf5(filepath: str):
         X_val, y_val = load_group('val')
         X_test, y_test = load_group('test')
         return X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def _compute_train_y_stats(y_train: list[torch.Tensor]):
+    """Calculates Z-score statistics for the target over the training subset only."""
+    all_y = torch.cat(y_train, dim=0).float()  # [total_windows, horizon]
+    mean = all_y.mean()
+    std = all_y.std()
+    std = torch.clamp(std, min=1e-8)
+    return mean, std
 
 
 def _compute_train_imu_stats(X_train: list[torch.Tensor]):
@@ -100,10 +114,11 @@ def build_pretrain_dataloaders(
 
     logger.info("Computing IMU standard scaling from training subset")
     imu_mean, imu_std = _compute_train_imu_stats(X_train)
+    y_mean, y_std = _compute_train_y_stats(y_train)
 
-    train_dataset = HDF5KneeDataset(X_train, y_train, imu_mean, imu_std)
-    val_dataset = HDF5KneeDataset(X_val, y_val, imu_mean, imu_std)
-    test_dataset = HDF5KneeDataset(X_test, y_test, imu_mean, imu_std)
+    train_dataset = HDF5KneeDataset(X_train, y_train, imu_mean, imu_std, y_mean, y_std)
+    val_dataset = HDF5KneeDataset(X_val, y_val, imu_mean, imu_std, y_mean, y_std)
+    test_dataset = HDF5KneeDataset(X_test, y_test, imu_mean, imu_std, y_mean, y_std)
 
     if num_workers is None:
         num_workers = min(os.cpu_count() or 1, 8)
@@ -137,7 +152,9 @@ def build_pretrain_dataloaders(
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
         "test_samples": len(test_dataset),
-        "fold_dir": str(data_dir)
+        "fold_dir": str(data_dir),
+        "y_mean": y_mean.item(),
+        "y_std": y_std.item(),
     }
 
     return train_loader, val_loader, test_loader, split_info
