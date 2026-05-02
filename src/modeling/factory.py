@@ -23,6 +23,48 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
     )
 
 
+def build_timesnet(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> nn.Module:
+    from src.modeling.timesnet import TimesNet
+
+    tcfg = cfg.model.timesnet
+    return TimesNet(
+        input_features=int(tcfg.input_features),
+        d_model=int(tcfg.d_model),
+        num_blocks=int(tcfg.num_blocks),
+        seq_len=seq_length,
+        pred_len=forecast_horizon,
+        dropout=float(tcfg.dropout),
+        top_k=int(tcfg.get("top_k", 3)),
+        d_ff=int(tcfg.get("d_ff", 128)),
+        num_kernels=int(tcfg.get("num_kernels", 2)),
+    )
+
+
+def build_tcn(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> nn.Module:
+    from src.modeling.tcn import TCN
+
+    tcfg = cfg.model.tcn
+    return TCN(
+        input_features=int(tcfg.input_features),
+        d_model=int(tcfg.d_model),
+        num_blocks=int(tcfg.num_blocks),
+        kernel_size=int(tcfg.kernel_size),
+        forecast_horizon=forecast_horizon,
+        dropout=float(tcfg.dropout),
+    )
+
+
+def build_model(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> nn.Module:
+    model_type = str(cfg.model.get("model_type", "encoder")).lower()
+    if model_type == "encoder":
+        return build_encoder(cfg, seq_length, forecast_horizon)
+    if model_type == "timesnet":
+        return build_timesnet(cfg, seq_length, forecast_horizon)
+    if model_type == "tcn":
+        return build_tcn(cfg, seq_length, forecast_horizon)
+    raise ValueError(f"Unknown model_type: {model_type!r}. Choose from: encoder, timesnet, tcn")
+
+
 def build_optimizer(cfg: DictConfig, parameters, device: torch.device | None = None):
     optimizer_cfg = cfg.model.optimizer
     optimizer_name = str(optimizer_cfg.name).lower()
@@ -79,5 +121,12 @@ def build_loss(cfg: DictConfig):
 
     if loss_name == "l1":
         return nn.L1Loss(reduction=reduction)
+
+    if loss_name == "smooth_l1":
+        return nn.SmoothL1Loss(reduction=reduction)
+
+    if loss_name == "huber":
+        delta = float(loss_cfg.get("delta", 1.0))
+        return nn.HuberLoss(reduction=reduction, delta=delta)
 
     raise ValueError(f"Unsupported loss '{loss_cfg.name}'")

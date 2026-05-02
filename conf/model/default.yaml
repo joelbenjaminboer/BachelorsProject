@@ -1,3 +1,6 @@
+model_type: encoder
+supports_pretrain: true
+
 encoder:
   input_features: 6
   d_model: 128

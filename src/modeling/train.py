@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
-from src.modeling.factory import build_encoder, build_loss, build_optimizer, build_scheduler
+from src.modeling.factory import build_loss, build_model, build_optimizer, build_scheduler
 from src.modeling.plotting import save_train_artifacts, should_save_intermediate_epoch
 from src.modeling.runtime import (
     autocast_context,
@@ -55,8 +55,9 @@ class Trainer:
             **loader_kwargs
         )
 
-        logger.info("Initializing IMU_Intent_Encoder from cfg.model")
-        self.model = build_encoder(
+        model_type = str(cfg.model.get("model_type", "encoder"))
+        logger.info(f"Initializing model: {model_type}")
+        self.model = build_model(
             cfg=cfg,
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
@@ -99,6 +100,14 @@ class Trainer:
 
     def run(self):
         freeze_epochs = self.cfg.training.get("freeze_encoder_epochs", 0)
+        model_type = str(self.cfg.model.get("model_type", "encoder"))
+        if freeze_epochs > 0 and model_type != "encoder":
+            logger.warning(
+                "freeze_encoder_epochs={} is not supported for model_type='{}', skipping freeze phase",
+                freeze_epochs,
+                model_type,
+            )
+            freeze_epochs = 0
 
         if freeze_epochs > 0:
             self._set_encoder_grad(False)

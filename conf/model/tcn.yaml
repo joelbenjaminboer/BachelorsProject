@@ -1,0 +1,27 @@
+model_type: tcn
+supports_pretrain: false
+
+tcn:
+  input_features: 6
+  d_model: 64
+  num_blocks: 4
+  kernel_size: 5
+  dropout: 0.3
+
+optimizer:
+  name: adamw
+  lr: 1.0e-3
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+loss:
+  name: huber
+  delta: 1.0
+  reduction: mean
+
+scheduler:
+  name: reduce_on_plateau
+  factor: 0.5
+  patience: 5
+  min_lr: 1.0e-6

@@ -9,7 +9,7 @@ import torch
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
-from src.modeling.factory import build_encoder
+from src.modeling.factory import build_model
 from src.modeling.plotting import save_eval_artifacts
 from src.modeling.runtime import (
     autocast_context,
@@ -63,7 +63,7 @@ class Evaluator:
         if len(self.loader.dataset) == 0:
             raise ValueError("No samples found for held-out subjects")
 
-        self.model = build_encoder(
+        self.model = build_model(
             cfg=cfg,
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,

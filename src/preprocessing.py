@@ -28,7 +28,6 @@ def save_fold_to_hdf5(file_path, X_train, y_train, X_val, y_val, X_test, y_test)
 
 class IMUPreprocessor:
     def __init__(self, root_dir, window_size=15, horizon=10, original_freq=500, target_freq=100):
-        # We default target_freq to 100 to match original BachelorsProject, or 50 if specified
         self.root_dir = root_dir
         self.predictors = [
             'Right_Thigh_Ax', 'Right_Thigh_Ay', 'Right_Thigh_Az',
@@ -75,7 +74,6 @@ class IMUPreprocessor:
         Xw, yw = [], []
         for i in range(len(X) - self.window_size - self.horizon):
             Xw.append(X[i:i + self.window_size])
-            # Target is the value at horizon after the window
             yw.append(y[i + self.window_size: i + self.window_size + self.horizon, 0])
         return np.array(Xw), np.array(yw)
 

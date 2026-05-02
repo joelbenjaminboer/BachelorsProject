@@ -25,13 +25,19 @@ def main(cfg: DictConfig):
         run_preprocessing(cfg, version=version)
         
     if run_cfg.get("pretrain", False):
-        checkpoint_path = run_pretrain(cfg, version=version)
-        if checkpoint_path:
-            try:
-                pretrained_state_dict = torch.load(checkpoint_path, map_location="cpu")
-                logger.info(f"Loaded pretrained weights from {checkpoint_path}")
-            except FileNotFoundError:
-                logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
+        if not cfg.model.get("supports_pretrain", True):
+            logger.info(
+                "Skipping pretraining: model_type='{}' does not support MAE pretraining",
+                cfg.model.get("model_type", "encoder"),
+            )
+        else:
+            checkpoint_path = run_pretrain(cfg, version=version)
+            if checkpoint_path:
+                try:
+                    pretrained_state_dict = torch.load(checkpoint_path, map_location="cpu")
+                    logger.info(f"Loaded pretrained weights from {checkpoint_path}")
+                except FileNotFoundError:
+                    logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
     
     if run_cfg.get("train", False):
         if run_cfg.get("load_checkpoint", False) and pretrained_state_dict is None:

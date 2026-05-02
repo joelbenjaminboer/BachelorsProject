@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 
 from src.dataloader import build_pretrain_dataloaders
-from src.modeling.factory import build_encoder, build_loss, build_optimizer
+from src.modeling.factory import build_loss, build_model, build_optimizer
 from src.modeling.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
 from src.modeling.runtime import (
     autocast_context,
@@ -193,7 +193,7 @@ class Pretrainer:
             f"{', '.join(val_subjects) or 'None'}"
         )
 
-        self.model = build_encoder(
+        self.model = build_model(
             cfg=cfg,
             seq_length=self.seq_length,
             forecast_horizon=self.forecast_horizon,
