@@ -2,7 +2,8 @@ from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 
-from src.modeling.encoder import IMU_Intent_Encoder
+from src.models.encoder import IMU_Intent_Encoder
+from src.runtime import RunContext, maybe_compile_model, maybe_wrap_parallel
 
 
 def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IMU_Intent_Encoder:
@@ -24,7 +25,7 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
 
 
 def build_timesnet(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> nn.Module:
-    from src.modeling.timesnet import TimesNet
+    from src.models.timesnet import TimesNet
 
     tcfg = cfg.model.timesnet
     return TimesNet(
@@ -41,7 +42,7 @@ def build_timesnet(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> n
 
 
 def build_tcn(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> nn.Module:
-    from src.modeling.tcn import TCN
+    from src.models.tcn import TCN
 
     tcfg = cfg.model.tcn
     return TCN(
@@ -63,6 +64,17 @@ def build_model(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> nn.M
     if model_type == "tcn":
         return build_tcn(cfg, seq_length, forecast_horizon)
     raise ValueError(f"Unknown model_type: {model_type!r}. Choose from: encoder, timesnet, tcn")
+
+
+def build_and_prepare_model(cfg: DictConfig, ctx: RunContext) -> nn.Module:
+    model = build_model(
+        cfg,
+        seq_length=cfg.training.context_length,
+        forecast_horizon=cfg.training.forecast_horizon,
+    ).to(ctx.device)
+    model = maybe_compile_model(model, cfg)
+    model = maybe_wrap_parallel(model, cfg, ctx.device)
+    return model
 
 
 def build_optimizer(cfg: DictConfig, parameters, device: torch.device | None = None):

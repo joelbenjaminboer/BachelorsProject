@@ -3,55 +3,65 @@ from pathlib import Path
 import hydra
 from loguru import logger
 from omegaconf import DictConfig
-from src.dataset_download import run_download
-from src.modeling.eval import run_eval
-from src.modeling.pretrain import run_pretrain
-from src.modeling.train import run_train
-from src.preprocessing import run_preprocessing
 import torch
+
+from src.data.download import run_download
+from src.data.preprocessing import run_preprocessing
+from src.models.factory import build_and_prepare_model
+from src.runtime import build_run_context, load_state_into_model
+from src.training.eval import run_eval
+from src.training.pretrain import run_pretrain
+from src.training.train import run_train
+
+
+MODEL_STAGES = ("pretrain", "train", "eval")
 
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     run_cfg = cfg.get("run", {})
-    pretrained_state_dict = None
-    best_checkpoint_path = None
     version = cfg.get("version", "0.1.0")
 
     if run_cfg.get("download", False):
         run_download(cfg)
-        
+
     if run_cfg.get("preprocess", False):
         run_preprocessing(cfg, version=version)
-        
-    if run_cfg.get("pretrain", False):
-        if not cfg.model.get("supports_pretrain", True):
-            logger.info(
-                "Skipping pretraining: model_type='{}' does not support MAE pretraining",
-                cfg.model.get("model_type", "encoder"),
-            )
-        else:
-            checkpoint_path = run_pretrain(cfg, version=version)
-            if checkpoint_path:
-                try:
-                    pretrained_state_dict = torch.load(checkpoint_path, map_location="cpu")
-                    logger.info(f"Loaded pretrained weights from {checkpoint_path}")
-                except FileNotFoundError:
-                    logger.warning(f"Pretrained checkpoint not found: {checkpoint_path}")
-    
+
+    if not any(run_cfg.get(stage, False) for stage in MODEL_STAGES):
+        return
+
+    ctx = build_run_context(cfg, version=version)
+    model = build_and_prepare_model(cfg, ctx)
+
+    pretrain_supported = bool(cfg.model.get("supports_pretrain", True))
+    will_pretrain = run_cfg.get("pretrain", False) and pretrain_supported
+
+    if run_cfg.get("pretrain", False) and not pretrain_supported:
+        logger.info(
+            "Skipping pretraining: model_type='{}' does not support MAE pretraining",
+            cfg.model.get("model_type", "encoder"),
+        )
+
+    if will_pretrain:
+        run_pretrain(cfg, model=model, ctx=ctx)
+
+    best_checkpoint_path = None
     if run_cfg.get("train", False):
-        if run_cfg.get("load_checkpoint", False) and pretrained_state_dict is None:
+        if not will_pretrain and run_cfg.get("load_checkpoint", False):
             checkpoint_path = Path(run_cfg.get("checkpoint_path", ""))
             if checkpoint_path.exists():
-                pretrained_state_dict = torch.load(checkpoint_path, map_location="cpu")
-                logger.info(f"Loaded pretrained weights from {checkpoint_path}")
+                state = torch.load(checkpoint_path, map_location=ctx.device)
+                load_state_into_model(model, state, source=str(checkpoint_path))
             else:
-                logger.warning(f"Checkpoint not found: {checkpoint_path}. Starting training from scratch.")
+                logger.warning(
+                    f"Checkpoint not found: {checkpoint_path}. Starting training from scratch."
+                )
 
-        best_checkpoint_path = run_train(cfg, pretrained_state_dict=pretrained_state_dict, version=version)
+        best_checkpoint_path = run_train(cfg, model=model, ctx=ctx)
 
     if run_cfg.get("eval", False):
-        run_eval(cfg, version=version, checkpoint_path=best_checkpoint_path)
+        run_eval(cfg, model=model, ctx=ctx, checkpoint_path=best_checkpoint_path)
 
 
 if __name__ == "__main__":

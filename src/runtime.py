@@ -1,10 +1,15 @@
 import contextlib
 import os
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
+import hydra
 from loguru import logger
 from omegaconf import DictConfig
 import torch
+from torch.utils.data import DataLoader
+
+from src.data.dataloader import build_dataloaders
 
 
 def _gpu_cfg(cfg: DictConfig):
@@ -218,3 +223,122 @@ def unwrap_model(model):
         else:
             break
     return model
+
+
+@dataclass
+class RunContext:
+    device: torch.device
+    autocast_kwargs: Optional[dict]
+    non_blocking_transfer: bool
+    train_loader: DataLoader
+    val_loader: DataLoader
+    test_loader: DataLoader
+    split_info: dict
+    version: str
+    accumulation_steps: int
+    clip_grad_norm: Optional[float]
+    fold_dir: str
+
+
+def build_run_context(cfg: DictConfig, version: str) -> RunContext:
+    device = resolve_device(cfg)
+    configure_runtime(cfg, device)
+    autocast_kwargs = resolve_autocast_kwargs(cfg, device)
+    accumulation_steps, clip_grad_norm = resolve_gradient_settings(cfg)
+    loader_kwargs = resolve_dataloader_kwargs(cfg, device)
+    non_blocking = use_non_blocking_transfer(
+        cfg, device, pin_memory=loader_kwargs.get("pin_memory", False)
+    )
+
+    holdout_subjects = cfg.training.get("holdout_subjects", [])
+    if not holdout_subjects:
+        raise ValueError("training.holdout_subjects must contain at least one subject")
+    holdout = holdout_subjects[0]
+
+    fold_dir = os.path.join(
+        hydra.utils.to_absolute_path(cfg.dataset.processed_dir), f"fold_{holdout}"
+    )
+
+    train_loader, val_loader, test_loader, split_info = build_dataloaders(
+        data_dir=fold_dir,
+        batch_size=cfg.training.batch_size,
+        seed=cfg.training.get("split_seed", 42),
+        **loader_kwargs,
+    )
+
+    logger.info(f"Using device: {device}")
+    logger.info(f"Run version: {version}")
+    logger.info(
+        f"Holdout subject: {holdout} | "
+        f"train: {split_info['train_samples']} | "
+        f"val: {split_info['val_samples']} | "
+        f"test: {split_info['test_samples']}"
+    )
+
+    return RunContext(
+        device=device,
+        autocast_kwargs=autocast_kwargs,
+        non_blocking_transfer=non_blocking,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        split_info=split_info,
+        version=version,
+        accumulation_steps=accumulation_steps,
+        clip_grad_norm=clip_grad_norm,
+        fold_dir=fold_dir,
+    )
+
+
+def backward_and_step(
+    *,
+    loss: torch.Tensor,
+    model,
+    optimizer,
+    scaler,
+    accumulation_steps: int,
+    clip_grad_norm: Optional[float],
+    batch_idx: int,
+    total_batches: int,
+) -> bool:
+    loss_for_backward = loss / accumulation_steps
+
+    if scaler is not None:
+        scaler.scale(loss_for_backward).backward()
+    else:
+        loss_for_backward.backward()
+
+    should_step = ((batch_idx + 1) % accumulation_steps == 0) or (
+        batch_idx + 1 == total_batches
+    )
+    if not should_step:
+        return False
+
+    if clip_grad_norm is not None:
+        if scaler is not None:
+            scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+
+    if scaler is not None:
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        optimizer.step()
+
+    optimizer.zero_grad(set_to_none=True)
+    return True
+
+
+def load_state_into_model(model, state_dict, *, source: str = "checkpoint") -> None:
+    cleaned = dict(state_dict)
+    cleaned.pop("positional_layer.pe", None)
+    incompatible = unwrap_model(model).load_state_dict(cleaned, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        logger.warning(
+            "Loaded {} with missing keys: {} and unexpected keys: {}",
+            source,
+            incompatible.missing_keys,
+            incompatible.unexpected_keys,
+        )
+    else:
+        logger.info(f"Loaded {source} weights into model")

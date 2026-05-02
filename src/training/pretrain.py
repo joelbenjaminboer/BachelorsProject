@@ -6,21 +6,14 @@ from omegaconf import DictConfig
 import torch
 from tqdm import tqdm
 
-from src.dataloader import build_pretrain_dataloaders
-from src.modeling.factory import build_loss, build_model, build_optimizer
-from src.modeling.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
-from src.modeling.runtime import (
+from src.models.factory import build_loss, build_optimizer
+from src.training.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
+from src.runtime import (
+    RunContext,
     autocast_context,
+    backward_and_step,
     build_grad_scaler,
-    configure_runtime,
-    maybe_compile_model,
-    maybe_wrap_parallel,
-    resolve_autocast_kwargs,
-    resolve_dataloader_kwargs,
-    resolve_device,
-    resolve_gradient_settings,
     unwrap_model,
-    use_non_blocking_transfer,
 )
 
 CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
@@ -95,9 +88,8 @@ def evaluate_masked_reconstruction(
         for batch in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{epochs} [{phase_label}]"):
             past_imu = batch["past_imu"].to(device, non_blocking=non_blocking_transfer)
 
-            batch_size_current = past_imu.size(0)
             mask = build_contiguous_block_mask(
-                batch_size=batch_size_current,
+                batch_size=past_imu.size(0),
                 seq_length=seq_length,
                 min_block_len=mask_block_min_len,
                 max_block_len=mask_block_max_len,
@@ -130,85 +122,25 @@ def evaluate_masked_reconstruction(
 
 
 class Pretrainer:
-    def __init__(self, cfg: DictConfig, version=None):
+    def __init__(self, cfg: DictConfig, model, ctx: RunContext):
         self.cfg = cfg
-        self.device = resolve_device(cfg)
-        self.version = version or cfg.get("version", "default")
-        configure_runtime(cfg, self.device)
-        self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
+        self.ctx = ctx
+        self.model = model
+        self.device = ctx.device
+        self.autocast_kwargs = ctx.autocast_kwargs
         self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
-        self.accumulation_steps, self.clip_grad_norm = resolve_gradient_settings(cfg)
-
-        logger.info(f"Using device: {self.device} for Pretraining")
-        logger.info(f"Pretraining version: {self.version}")
 
         self.seq_length = cfg.training.context_length
-        self.forecast_horizon = cfg.training.forecast_horizon
-        self.batch_size = cfg.training.batch_size
         self.epochs = cfg.training.epochs
-        self.split_ratio = cfg.training.get("split_ratio", 0.9)
-        self.split_strategy = cfg.training.get("split_strategy", "loso")
-        self.holdout_subjects = cfg.training.get("holdout_subjects", [])
-        self.split_seed = cfg.training.get("split_seed", 42)
-        base_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
-        self.processed_dir = os.path.join(base_dir, f"fold_{self.holdout_subjects[0]}") if self.holdout_subjects else base_dir
-
-        loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
-        self.non_blocking_transfer = use_non_blocking_transfer(
-            cfg,
-            self.device,
-            pin_memory=loader_kwargs.get("pin_memory", False),
-        )
-        (
-            self.train_loader,
-            self.val_loader,
-            _,
-            self.split_info,
-        ) = build_pretrain_dataloaders(
-            data_dir=self.processed_dir,
-            batch_size=self.batch_size,
-            seed=self.split_seed,
-            num_workers=loader_kwargs.get("num_workers"),
-            persistent_workers=loader_kwargs.get("persistent_workers"),
-            prefetch_factor=loader_kwargs.get("prefetch_factor"),
-            pin_memory=loader_kwargs.get("pin_memory"),
-        )
-
-        logger.info(
-            f"Split strategy: {self.split_strategy} | "
-            f"held-out subjects: {', '.join(self.holdout_subjects) or 'None'}"
-        )
-        logger.info(
-            f"Samples - train: {self.split_info['train_samples']}, "
-            f"val: {self.split_info['val_samples']}"
-        )
-        train_subjects = self.split_info.get('train_subjects', [])
-        val_subjects = self.split_info.get('val_subjects', [])
-        logger.info(
-            f"Train subjects ({len(train_subjects)}): "
-            f"{', '.join(train_subjects) or 'None'}"
-        )
-        logger.info(
-            f"Val subjects ({len(val_subjects)}): "
-            f"{', '.join(val_subjects) or 'None'}"
-        )
-
-        self.model = build_model(
-            cfg=cfg,
-            seq_length=self.seq_length,
-            forecast_horizon=self.forecast_horizon,
-        ).to(self.device)
-
-        self.model = maybe_compile_model(self.model, cfg)
-        self.model = maybe_wrap_parallel(self.model, cfg, self.device)
 
         self.criterion = build_loss(cfg)
         self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
 
-        raw_mask_block_min_len = int(cfg.training.get("mask_block_min_len", 10))
-        raw_mask_block_max_len = int(cfg.training.get("mask_block_max_len", 20))
-        self.mask_block_min_len = min(raw_mask_block_min_len, raw_mask_block_max_len)
-        self.mask_block_max_len = max(raw_mask_block_min_len, raw_mask_block_max_len)
+        raw_min = int(cfg.training.get("mask_block_min_len", 10))
+        raw_max = int(cfg.training.get("mask_block_max_len", 20))
+        self.mask_block_min_len = min(raw_min, raw_max)
+        self.mask_block_max_len = max(raw_min, raw_max)
+
         self.best_val_loss = float("inf")
         self.best_epoch = None
         self.best_checkpoint_path = None
@@ -234,15 +166,14 @@ class Pretrainer:
             self.optimizer.zero_grad(set_to_none=True)
 
             for batch_idx, batch in enumerate(
-                tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]")
+                tqdm(self.ctx.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Train]")
             ):
                 past_imu = batch["past_imu"].to(
                     self.device,
-                    non_blocking=self.non_blocking_transfer,
+                    non_blocking=self.ctx.non_blocking_transfer,
                 )
-                batch_size_current = past_imu.size(0)
                 mask = build_contiguous_block_mask(
-                    batch_size=batch_size_current,
+                    batch_size=past_imu.size(0),
                     seq_length=self.seq_length,
                     min_block_len=self.mask_block_min_len,
                     max_block_len=self.mask_block_max_len,
@@ -252,7 +183,6 @@ class Pretrainer:
                 with autocast_context(self.autocast_kwargs):
                     reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
                     loss = self.criterion(reconstructed_imu[mask], past_imu[mask])
-                    loss_for_backward = loss / self.accumulation_steps
 
                 batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                     reconstructed_imu, past_imu, mask
@@ -261,32 +191,21 @@ class Pretrainer:
                     train_sq_error_sum += batch_sq_error_sum
                     train_masked_count += batch_masked_count
 
-                if self.scaler is not None:
-                    self.scaler.scale(loss_for_backward).backward()
-                else:
-                    loss_for_backward.backward()
-
-                should_step = ((batch_idx + 1) % self.accumulation_steps == 0) or (
-                    batch_idx + 1 == len(self.train_loader)
+                backward_and_step(
+                    loss=loss,
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    scaler=self.scaler,
+                    accumulation_steps=self.ctx.accumulation_steps,
+                    clip_grad_norm=self.ctx.clip_grad_norm,
+                    batch_idx=batch_idx,
+                    total_batches=len(self.ctx.train_loader),
                 )
-                if should_step:
-                    if self.clip_grad_norm is not None:
-                        if self.scaler is not None:
-                            self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
-
-                    if self.scaler is not None:
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        self.optimizer.step()
-
-                    self.optimizer.zero_grad(set_to_none=True)
 
                 train_loss += loss.item()
 
-            if len(self.train_loader) > 0:
-                train_loss /= len(self.train_loader)
+            if len(self.ctx.train_loader) > 0:
+                train_loss /= len(self.ctx.train_loader)
 
             if train_masked_count > 0:
                 train_channel_mse = (train_sq_error_sum / train_masked_count).detach().cpu()
@@ -297,11 +216,11 @@ class Pretrainer:
 
             val_loss, val_channel_mse, val_channel_rmse = evaluate_masked_reconstruction(
                 model=self.model,
-                data_loader=self.val_loader,
+                data_loader=self.ctx.val_loader,
                 criterion=self.criterion,
                 device=self.device,
                 autocast_kwargs=self.autocast_kwargs,
-                non_blocking_transfer=self.non_blocking_transfer,
+                non_blocking_transfer=self.ctx.non_blocking_transfer,
                 seq_length=self.seq_length,
                 mask_block_min_len=self.mask_block_min_len,
                 mask_block_max_len=self.mask_block_max_len,
@@ -341,13 +260,18 @@ class Pretrainer:
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.best_epoch = epoch + 1
-                save_dir = os.path.join(hydra.utils.get_original_cwd(), "checkpoints", "pretrain", self.version or "default")
+                save_dir = os.path.join(
+                    hydra.utils.get_original_cwd(),
+                    "checkpoints",
+                    "pretrain",
+                    self.ctx.version,
+                )
                 os.makedirs(save_dir, exist_ok=True)
-                checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
-
+                checkpoint_path = os.path.join(
+                    save_dir, f"best_pretrained_epoch_{epoch + 1}.pth"
+                )
                 torch.save(unwrap_model(self.model).state_dict(), checkpoint_path)
                 logger.info(f"Saved new best pretrained checkpoint to {checkpoint_path}")
-
                 self.best_checkpoint_path = checkpoint_path
 
             if should_save_intermediate_epoch(self.cfg, epoch):
@@ -382,15 +306,5 @@ class Pretrainer:
         return self.best_checkpoint_path
 
 
-def run_pretrain(cfg: DictConfig, version=None):
-    trainer = Pretrainer(cfg, version=version)
-    return trainer.run()
-
-
-@hydra.main(config_path="../../conf", config_name="config", version_base=None)
-def main(cfg: DictConfig):
-    run_pretrain(cfg, version=cfg.get("version", "0.1.0"))
-
-
-if __name__ == "__main__":
-    main()
+def run_pretrain(cfg: DictConfig, model, ctx: RunContext):
+    return Pretrainer(cfg, model=model, ctx=ctx).run()

@@ -1,5 +1,4 @@
 from collections import defaultdict
-import os
 from pathlib import Path
 
 import hydra
@@ -8,117 +7,57 @@ from omegaconf import DictConfig
 import torch
 from tqdm import tqdm
 
-from src.dataloader import build_pretrain_dataloaders
-from src.modeling.factory import build_model
-from src.modeling.plotting import save_eval_artifacts
-from src.modeling.runtime import (
+from src.training.plotting import save_eval_artifacts
+from src.runtime import (
+    RunContext,
     autocast_context,
-    configure_runtime,
-    maybe_wrap_parallel,
-    resolve_autocast_kwargs,
-    resolve_dataloader_kwargs,
-    resolve_device,
-    unwrap_model,
-    use_non_blocking_transfer,
+    load_state_into_model,
 )
 
 
 class Evaluator:
-    def __init__(self, cfg: DictConfig, version=None, checkpoint_path=None):
+    def __init__(self, cfg: DictConfig, model, ctx: RunContext, checkpoint_path=None):
         self.cfg = cfg
-        self.device = resolve_device(cfg)
-        self.version = version or cfg.get("version", "default")
-        configure_runtime(cfg, self.device)
-        self.autocast_kwargs = resolve_autocast_kwargs(cfg, self.device)
+        self.ctx = ctx
+        self.model = model
+        self.device = ctx.device
+        self.autocast_kwargs = ctx.autocast_kwargs
         self.explicit_checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
-        logger.info(f"Using device: {self.device} for Evaluation")
-        logger.info(f"Evaluation version: {self.version}")
-        self.seq_length = cfg.training.context_length
+
         self.forecast_horizon = cfg.training.forecast_horizon
-        self.batch_size = cfg.training.batch_size
-        self.processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
-        self.holdout_subjects = cfg.training.get("holdout_subjects", [])
 
-        # Use the holdout subject's fold directory
-        if not self.holdout_subjects:
-            raise ValueError("Eval requires held-out subjects in training.holdout_subjects")
-
-        holdout = self.holdout_subjects[0]
-        fold_dir = os.path.join(self.processed_dir, f"fold_{holdout}")
-
-        loader_kwargs = resolve_dataloader_kwargs(cfg, self.device)
-        self.non_blocking_transfer = use_non_blocking_transfer(
-            cfg,
-            self.device,
-            pin_memory=loader_kwargs.get("pin_memory", False),
-        )
-        
-        _, _, self.loader, self.split_info = build_pretrain_dataloaders(
-            data_dir=fold_dir,
-            batch_size=self.batch_size,
-            seed=cfg.training.get("split_seed", 42),
-            **loader_kwargs
-        )
-        
-        if len(self.loader.dataset) == 0:
+        if len(ctx.test_loader.dataset) == 0:
             raise ValueError("No samples found for held-out subjects")
-
-        self.model = build_model(
-            cfg=cfg,
-            seq_length=self.seq_length,
-            forecast_horizon=self.forecast_horizon,
-        ).to(self.device)
-
-        self.model = maybe_wrap_parallel(self.model, cfg, self.device)
 
     def _find_best_checkpoint(self) -> Path:
         base_checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints"
 
-        checkpoint_dirs = []
-        if self.version:
-            checkpoint_dirs.append(base_checkpoints_dir / str(self.version))
-            checkpoint_dirs.append(base_checkpoints_dir / f"{self.version}")
-        checkpoint_dirs.append(base_checkpoints_dir)
-
         candidates = []
         seen = set()
-        for checkpoints_dir in checkpoint_dirs:
+        for checkpoints_dir in [base_checkpoints_dir / self.ctx.version, base_checkpoints_dir]:
             if checkpoints_dir in seen:
                 continue
             seen.add(checkpoints_dir)
             candidates.extend(sorted(checkpoints_dir.glob("best_model_epoch_*.pth")))
 
         if not candidates:
-            searched_dirs = ", ".join(str(path) for path in checkpoint_dirs)
             raise FileNotFoundError(
-                "No checkpoints found. Expected best_model_epoch_*.pth in: "
-                f"{searched_dirs}"
+                f"No best_model_epoch_*.pth checkpoints found in {base_checkpoints_dir}"
             )
 
         def epoch_number(path: Path) -> int:
-            name = path.stem
             try:
-                return int(name.split("best_model_epoch_")[-1])
+                return int(path.stem.split("best_model_epoch_")[-1])
             except ValueError:
                 return -1
 
-        best = max(candidates, key=lambda p: (epoch_number(p), p.stat().st_mtime))
-        return best
-
-    def _load_checkpoint(self, checkpoint_path: Path):
-        logger.info(f"Loading checkpoint: {checkpoint_path}")
-        state = torch.load(checkpoint_path, map_location=self.device)
-        incompatible = unwrap_model(self.model).load_state_dict(state, strict=False)
-        if incompatible.missing_keys or incompatible.unexpected_keys:
-            logger.warning(
-                "Loaded weights with missing keys: {} and unexpected keys: {}",
-                incompatible.missing_keys,
-                incompatible.unexpected_keys,
-            )
+        return max(candidates, key=lambda p: (epoch_number(p), p.stat().st_mtime))
 
     def run(self):
         checkpoint_path = self.explicit_checkpoint_path or self._find_best_checkpoint()
-        self._load_checkpoint(checkpoint_path)
+        logger.info(f"Loading checkpoint: {checkpoint_path}")
+        state = torch.load(checkpoint_path, map_location=self.device)
+        load_state_into_model(self.model, state, source=str(checkpoint_path))
 
         self.model.eval()
         total_squared_error = 0.0
@@ -140,18 +79,16 @@ class Evaluator:
         subject_absolute_error = defaultdict(float)
         subject_count = defaultdict(int)
 
-        y_mean = self.split_info.get("y_mean")
-        y_std = self.split_info.get("y_std")
+        y_mean = self.ctx.split_info.get("y_mean")
+        y_std = self.ctx.split_info.get("y_std")
 
         with torch.inference_mode():
-            for batch in tqdm(self.loader, desc="Eval"):
+            for batch in tqdm(self.ctx.test_loader, desc="Eval"):
                 past_imu = batch["past_imu"].to(
-                    self.device,
-                    non_blocking=self.non_blocking_transfer,
+                    self.device, non_blocking=self.ctx.non_blocking_transfer
                 )
                 future_knee = batch["future_knee"].to(
-                    self.device,
-                    non_blocking=self.non_blocking_transfer,
+                    self.device, non_blocking=self.ctx.non_blocking_transfer
                 )
 
                 with autocast_context(self.autocast_kwargs):
@@ -217,14 +154,12 @@ class Evaluator:
             count = subject_count[subject_id]
             if count <= 0:
                 continue
-
             subject_mse = subject_squared_error[subject_id] / count
             subject_mae = subject_absolute_error[subject_id] / count
-            subject_rmse = subject_mse**0.5
             subject_metrics[subject_id] = {
                 "mse": subject_mse,
                 "mae": subject_mae,
-                "rmse": subject_rmse,
+                "rmse": subject_mse**0.5,
                 "count": count,
             }
 
@@ -257,15 +192,5 @@ class Evaluator:
         }
 
 
-def run_eval(cfg: DictConfig, version=None, checkpoint_path=None):
-    evaluator = Evaluator(cfg, version=version, checkpoint_path=checkpoint_path)
-    return evaluator.run()
-
-
-@hydra.main(config_path="../../conf", config_name="config", version_base=None)
-def main(cfg: DictConfig):
-    run_eval(cfg, version=cfg.get("version", "0.1.0"))
-
-
-if __name__ == "__main__":
-    main()
+def run_eval(cfg: DictConfig, model, ctx: RunContext, checkpoint_path=None):
+    return Evaluator(cfg, model=model, ctx=ctx, checkpoint_path=checkpoint_path).run()

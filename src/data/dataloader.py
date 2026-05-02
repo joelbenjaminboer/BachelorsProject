@@ -97,7 +97,7 @@ def _compute_train_imu_stats(X_train: list[torch.Tensor]):
     return mean.float(), std.float()
 
 
-def build_pretrain_dataloaders(
+def build_dataloaders(
     data_dir: str,
     batch_size: int,
     seed: int = 42,
