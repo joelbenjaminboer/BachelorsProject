@@ -97,11 +97,15 @@ def _run_trial(trial: optuna.Trial, cfg: DictConfig, ctx: RunContext, trial_epoc
     overrides = _suggest_overrides(trial, search_space, trial_epochs)
     trial_cfg = OmegaConf.merge(cfg, OmegaConf.create(overrides))
 
+    # Rebuild run context so each trial gets its own safe Thread/Process dataloaders
+    from src.runtime import build_run_context
+    trial_ctx = build_run_context(trial_cfg, ctx.version)
+
     logger.info("Trial {} starting | params: {}", trial.number, trial.params)
 
-    model = build_and_prepare_model(trial_cfg, ctx)
+    model = build_and_prepare_model(trial_cfg, trial_ctx)
     try:
-        return _TrialTrainer(trial_cfg, model, ctx, trial).run()
+        return _TrialTrainer(trial_cfg, model, trial_ctx, trial).run()
     finally:
         del model
         gc.collect()
