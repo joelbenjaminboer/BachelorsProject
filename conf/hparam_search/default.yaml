@@ -1,0 +1,61 @@
+n_trials: 50
+epochs: 10        # epochs per trial; shorter than full training
+direction: minimize
+
+# Concurrent trials within one process.
+# n_jobs > 1 with SQLite storage causes write contention — use null (in-memory) or a proper RDB.
+# n_jobs > 1 on MPS is not recommended (MPS thread-safety is limited).
+n_jobs: 4
+
+# null = in-memory only. SQLite example: "sqlite:///optuna.db"
+# Set storage + run the script N times in separate terminals for distributed parallel search.
+storage: sqlite:///optuna.db
+
+pruner:
+  n_startup_trials: 5   # complete this many trials before pruning
+  n_warmup_steps: 5     # wait this many epochs before pruning within a trial
+
+# Each entry names the Optuna parameter, its type, and the config path it overrides (target).
+# type: categorical  → choices list
+# type: int          → low, high (inclusive)
+# type: float        → low, high; set log: true for log-uniform sampling
+search_space:
+  d_model:
+    target: model.encoder.d_model
+    type: categorical
+    choices: [64, 128, 256, 512]
+  num_heads:
+    target: model.encoder.num_heads
+    type: categorical
+    choices: [1, 2, 4, 8]
+  num_layers:
+    target: model.encoder.num_layers
+    type: int
+    low: 2
+    high: 6
+  dim_feedforward:
+    target: model.encoder.dim_feedforward
+    type: categorical
+    choices: [256, 512, 1024, 2048]
+  dropout:
+    target: model.encoder.dropout
+    type: float
+    low: 0.0
+    high: 0.3
+  lr:
+    target: model.optimizer.lr
+    type: float
+    low: 1.0e-5
+    high: 1.0e-3
+    log: true
+  weight_decay:
+    target: model.optimizer.weight_decay
+    type: float
+    low: 1.0e-6
+    high: 1.0e-3
+    log: true
+  freeze_encoder_epochs:
+    target: training.freeze_encoder_epochs
+    type: int
+    low: 0
+    high: 3

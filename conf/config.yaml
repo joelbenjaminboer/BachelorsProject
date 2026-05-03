@@ -5,6 +5,7 @@ defaults:
   - run: default
   - gpu: default
   - plotting: default
+  - hparam_search: default
   - _self_
 
-version: "FreezeEncoderTest"
+version: "Optuna.v1.0"

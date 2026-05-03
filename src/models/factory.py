@@ -21,6 +21,7 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
         dim_feedforward=int(encoder_cfg.dim_feedforward),
         positional_encoding_max_len=int(positional_encoding_max_len),
         positional_encoding_base=float(encoder_cfg.positional_encoding_base),
+        dropout=float(encoder_cfg.get("dropout", 0.1)),
     )
 
 

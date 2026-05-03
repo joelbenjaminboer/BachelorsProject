@@ -1,4 +1,5 @@
 loguru
+optuna
 pip
 python-dotenv
 ruff

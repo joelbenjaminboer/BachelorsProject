@@ -10,11 +10,12 @@ from src.data.preprocessing import run_preprocessing
 from src.models.factory import build_and_prepare_model
 from src.runtime import build_run_context, load_state_into_model
 from src.training.eval import run_eval
+from src.training.hparam_search import run_hparam_search
 from src.training.pretrain import run_pretrain
 from src.training.train import run_train
 
 
-MODEL_STAGES = ("pretrain", "train", "eval")
+MODEL_STAGES = ("pretrain", "train", "eval", "hparam_search")
 
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -32,6 +33,11 @@ def main(cfg: DictConfig):
         return
 
     ctx = build_run_context(cfg, version=version)
+
+    if run_cfg.get("hparam_search", False):
+        run_hparam_search(cfg, ctx)
+        return
+
     model = build_and_prepare_model(cfg, ctx)
 
     pretrain_supported = bool(cfg.model.get("supports_pretrain", True))

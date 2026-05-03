@@ -1,8 +1,9 @@
 download: false
-preprocess: true
-pretrain: true
-train: true
-eval: true
+preprocess: false
+hparam_search: true
+pretrain: false
+train: false
+eval: false
 
 load_checkpoint: false
 checkpoint_path: "checkpoints/pretrain/long-pretrain+znormalize/best_pretrained_epoch_4.pth"
