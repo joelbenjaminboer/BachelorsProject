@@ -9,8 +9,8 @@ from loguru import logger
 import matplotlib.pyplot as plt
 import numpy as np
 from omegaconf import DictConfig
-import torch
 import seaborn as sns
+import torch
 
 
 def _plot_cfg(cfg: DictConfig):
@@ -244,7 +244,9 @@ def save_pretrain_artifacts(
         ax.plot(epochs, train_losses, label="Train Loss", linewidth=2)
         ax.plot(epochs, val_losses, label="Val Loss", linewidth=2)
         if best_epoch is not None and 1 <= best_epoch <= len(train_losses):
-            ax.axvline(best_epoch, linestyle="--", linewidth=1.5, color="black", label="Best Epoch")
+            ax.axvline(
+                best_epoch, linestyle="--", linewidth=1.5, color="black", label="Best Epoch"
+            )
         ax.set_title("Pretraining Reconstruction Loss")
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
@@ -275,6 +277,40 @@ def save_pretrain_artifacts(
         )
 
 
+def _plot_complete_trials(
+    cfg: DictConfig,
+    stage_dir: Path,
+    complete_trials: Sequence[dict],
+    tag: str,
+):
+    if not complete_trials:
+        return
+
+    num_trials = len(complete_trials)
+    fig, axes = plt.subplots(num_trials, 1, figsize=(16, 3.5 * num_trials), squeeze=False)
+
+    for row, trial in enumerate(complete_trials):
+        ax = axes[row][0]
+        preds = np.asarray(trial["predictions"], dtype=float)
+        targets = np.asarray(trial["targets"], dtype=float)
+        timesteps = np.arange(len(targets))
+
+        ax.plot(timesteps, targets, label="Ground Truth", linewidth=1.8)
+        ax.plot(timesteps, preds, label="Prediction", linewidth=1.5, linestyle="--")
+        ax.set_title(trial.get("id", f"Trial {row}"))
+        ax.set_xlabel("Time Step")
+        ax.set_ylabel("Knee Angle")
+        ax.grid(alpha=0.3)
+
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 1.0))
+
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    saved_paths = _save_figure(fig, stage_dir / f"complete_trials_{tag}", cfg)
+    logger.info("Saved eval complete-trial plots: {}", ", ".join(map(str, saved_paths)))
+
+
 def save_eval_artifacts(
     cfg: DictConfig,
     overall_metrics: dict[str, float],
@@ -284,7 +320,8 @@ def save_eval_artifacts(
     target_examples: Sequence[Sequence[float]],
     example_subject_ids: Sequence[str],
     subject_metrics: dict[str, dict[str, float]],
-    checkpoint_path: str,
+    complete_trials: Sequence[dict] | None = None,
+    checkpoint_path: str = "",
     tag: str = "final",
 ):
     if not stage_enabled(cfg, "eval"):
@@ -327,7 +364,10 @@ def save_eval_artifacts(
         saved_paths = _save_figure(fig, stage_dir / f"overall_metrics_{tag}", cfg)
         logger.info("Saved eval overall plots: {}", ", ".join(map(str, saved_paths)))
 
-    if bool(eval_cfg.get("plot_per_step_metrics", True)) and len(per_step_metrics.get("rmse", [])) > 0:
+    if (
+        bool(eval_cfg.get("plot_per_step_metrics", True))
+        and len(per_step_metrics.get("rmse", [])) > 0
+    ):
         steps = np.arange(1, len(per_step_metrics["rmse"]) + 1)
         fig, ax = plt.subplots(figsize=(11, 5))
         ax.plot(steps, per_step_metrics.get("mse", []), linewidth=1.8, label="MSE")
@@ -412,3 +452,6 @@ def save_eval_artifacts(
 
         saved_paths = _save_figure(fig, stage_dir / f"subject_metrics_{tag}", cfg)
         logger.info("Saved eval subject plots: {}", ", ".join(map(str, saved_paths)))
+
+    if bool(eval_cfg.get("plot_complete_trials", True)) and complete_trials:
+        _plot_complete_trials(cfg, stage_dir, complete_trials, tag)

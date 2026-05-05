@@ -29,6 +29,8 @@ eval:
   plot_residual_histogram: true
   plot_prediction_examples: true
   plot_subject_bars: true
+  plot_complete_trials: true
   prediction_examples: 6
+  complete_trials: 5
   residual_bins: 60
   max_subjects_in_plot: 20

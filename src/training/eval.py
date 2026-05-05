@@ -7,12 +7,12 @@ from omegaconf import DictConfig
 import torch
 from tqdm import tqdm
 
-from src.training.plotting import save_eval_artifacts
 from src.runtime import (
     RunContext,
     autocast_context,
     load_state_into_model,
 )
+from src.training.plotting import save_eval_artifacts
 
 
 class Evaluator:
@@ -52,6 +52,52 @@ class Evaluator:
                 return -1
 
         return max(candidates, key=lambda p: (epoch_number(p), p.stat().st_mtime))
+
+    def _build_complete_trials(self, y_mean, y_std) -> list[dict]:
+        eval_cfg = self.cfg.get("plotting", {}).get("eval", {})
+        if not bool(eval_cfg.get("plot_complete_trials", True)):
+            return []
+
+        test_dataset = self.ctx.test_loader.dataset
+        num_trials = len(test_dataset.X)
+        max_trials = max(1, int(eval_cfg.get("complete_trials", 5)))
+        selected = min(max_trials, num_trials)
+
+        trials = []
+        for trial_idx in range(selected):
+            X_trial = test_dataset.X[trial_idx].float()
+            y_trial = test_dataset.y[trial_idx].float()
+
+            if test_dataset.imu_mean is not None:
+                X_norm = (X_trial - test_dataset.imu_mean) / test_dataset.imu_std
+            else:
+                X_norm = X_trial
+
+            preds_parts = []
+            targets_parts = []
+            with torch.inference_mode():
+                for i in range(0, len(X_norm), self.forecast_horizon):
+                    x = (
+                        X_norm[i]
+                        .unsqueeze(0)
+                        .to(self.device, non_blocking=self.ctx.non_blocking_transfer)
+                    )
+                    with autocast_context(self.autocast_kwargs):
+                        pred = self.model(x, task="predict")
+                    if y_mean is not None and y_std is not None:
+                        pred = pred * y_std + y_mean
+                    preds_parts.append(pred.squeeze(0).cpu())
+                    targets_parts.append(y_trial[i])
+
+            trials.append(
+                {
+                    "id": f"trial_{trial_idx}",
+                    "predictions": torch.cat(preds_parts).tolist(),
+                    "targets": torch.cat(targets_parts).tolist(),
+                }
+            )
+
+        return trials
 
     def run(self):
         checkpoint_path = self.explicit_checkpoint_path or self._find_best_checkpoint()
@@ -171,6 +217,8 @@ class Evaluator:
             "rmse": per_step_rmse.tolist(),
         }
 
+        complete_trials = self._build_complete_trials(y_mean, y_std)
+
         save_eval_artifacts(
             cfg=self.cfg,
             overall_metrics=overall_metrics,
@@ -180,6 +228,7 @@ class Evaluator:
             target_examples=example_targets,
             example_subject_ids=example_subject_ids,
             subject_metrics=subject_metrics,
+            complete_trials=complete_trials,
             checkpoint_path=str(checkpoint_path),
             tag="final",
         )
