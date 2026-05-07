@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - override /model: default
+
+dataset:
+  processed_dir: data/processed/ENABL3S_50hz_right
+  original_freq: 500
+  target_freq: 50
+  use_both_legs: false
+
+training:
+  context_length: 100
+  forecast_horizon: 10
+
+version: "encoder_50hz_right"
