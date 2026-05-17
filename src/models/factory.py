@@ -8,9 +8,16 @@ from src.runtime import RunContext, maybe_compile_model, maybe_wrap_parallel
 
 def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IMU_Intent_Encoder:
     encoder_cfg = cfg.model.encoder
+
+    raw_patch_size = encoder_cfg.get("patch_size", None)
+    patch_size = int(raw_patch_size) if raw_patch_size is not None else None
+
+    effective_seq_len = (seq_length // patch_size) if patch_size else seq_length
+    extra_tokens = int(encoder_cfg.positional_encoding_extra_tokens)
+
     positional_encoding_max_len = encoder_cfg.positional_encoding_max_len
     if positional_encoding_max_len is None:
-        positional_encoding_max_len = seq_length + int(encoder_cfg.positional_encoding_extra_tokens)
+        positional_encoding_max_len = effective_seq_len + extra_tokens
 
     return IMU_Intent_Encoder(
         input_features=int(encoder_cfg.input_features),
@@ -22,6 +29,8 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
         positional_encoding_max_len=int(positional_encoding_max_len),
         positional_encoding_base=float(encoder_cfg.positional_encoding_base),
         dropout=float(encoder_cfg.get("dropout", 0.1)),
+        pooling=str(encoder_cfg.get("pooling", "cls")),
+        patch_size=patch_size,
     )
 
 
@@ -93,9 +102,7 @@ def build_optimizer(cfg: DictConfig, parameters, device: torch.device | None = N
             "eps": eps,
         }
 
-        allow_fused_adamw = bool(
-            cfg.get("gpu", {}).get("cuda", {}).get("allow_fused_adamw", True)
-        )
+        allow_fused_adamw = bool(cfg.get("gpu", {}).get("cuda", {}).get("allow_fused_adamw", True))
         if device is not None and device.type == "cuda" and allow_fused_adamw:
             optimizer_kwargs["fused"] = True
 
@@ -108,7 +115,7 @@ def build_optimizer(cfg: DictConfig, parameters, device: torch.device | None = N
     raise ValueError(f"Unsupported optimizer '{optimizer_cfg.name}'")
 
 
-def build_scheduler(cfg: DictConfig, optimizer):
+def build_scheduler(cfg: DictConfig, optimizer, total_epochs: int | None = None):
     sched_cfg = cfg.model.get("scheduler", None)
     if sched_cfg is None:
         return None
@@ -120,6 +127,21 @@ def build_scheduler(cfg: DictConfig, optimizer):
             factor=float(sched_cfg.factor),
             patience=int(sched_cfg.patience),
             min_lr=float(sched_cfg.min_lr),
+        )
+    if name == "cosine_warmup":
+        warmup_epochs = int(sched_cfg.get("warmup_epochs", 5))
+        min_lr = float(sched_cfg.get("min_lr", 1e-6))
+        n = max(1, total_epochs or 100)
+        if n <= warmup_epochs:
+            return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n, eta_min=min_lr)
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs
+        )
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=n - warmup_epochs, eta_min=min_lr
+        )
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs]
         )
     raise ValueError(f"Unsupported scheduler '{sched_cfg.name}'")
 

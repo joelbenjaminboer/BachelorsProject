@@ -1,6 +1,7 @@
 device: auto
 
 deterministic: false
+seed: 42
 
 autocast:
   enabled: false
@@ -24,4 +25,4 @@ cuda:
 
 gradient:
   accumulation_steps: 1
-  clip_grad_norm: null
+  clip_grad_norm: 1.0

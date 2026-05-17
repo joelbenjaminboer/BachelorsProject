@@ -125,6 +125,10 @@ class Evaluator:
         subject_absolute_error = defaultdict(float)
         subject_count = defaultdict(int)
 
+        activity_squared_error = defaultdict(float)
+        activity_absolute_error = defaultdict(float)
+        activity_count = defaultdict(int)
+
         y_mean = self.ctx.split_info.get("y_mean")
         y_std = self.ctx.split_info.get("y_std")
 
@@ -164,11 +168,23 @@ class Evaluator:
                 else:
                     batch_subject_ids = [str(item) for item in batch_subject_ids]
 
+                batch_activity_ids = batch.get("activity_id")
+
                 for sample_idx, subject_id in enumerate(batch_subject_ids):
                     sample_errors = errors[sample_idx]
                     subject_squared_error[subject_id] += torch.sum(sample_errors**2).item()
                     subject_absolute_error[subject_id] += torch.sum(sample_errors.abs()).item()
                     subject_count[subject_id] += sample_errors.numel()
+
+                    if batch_activity_ids is not None:
+                        act_id = (
+                            int(batch_activity_ids[sample_idx].item())
+                            if isinstance(batch_activity_ids, torch.Tensor)
+                            else int(batch_activity_ids[sample_idx])
+                        )
+                        activity_squared_error[act_id] += torch.sum(sample_errors**2).item()
+                        activity_absolute_error[act_id] += torch.sum(sample_errors.abs()).item()
+                        activity_count[act_id] += sample_errors.numel()
 
                 if len(example_subject_ids) < max_examples:
                     take = min(max_examples - len(example_subject_ids), predictions.size(0))
@@ -209,6 +225,31 @@ class Evaluator:
                 "count": count,
             }
 
+        activity_label_map = {
+            1: "walk",
+            2: "ramp_up",
+            3: "ramp_down",
+            4: "stair_up",
+            5: "stair_down",
+        }
+        activity_metrics = {}
+        for act_id in sorted(activity_count):
+            count = activity_count[act_id]
+            if count <= 0:
+                continue
+            act_mse = activity_squared_error[act_id] / count
+            act_mae = activity_absolute_error[act_id] / count
+            label = activity_label_map.get(act_id, str(act_id))
+            activity_metrics[label] = {
+                "mse": act_mse,
+                "mae": act_mae,
+                "rmse": act_mse**0.5,
+                "count": count,
+            }
+            logger.info(
+                "Activity {:>10s} - RMSE: {:.6f} | MAE: {:.6f}", label, act_mse**0.5, act_mae
+            )
+
         residuals = torch.cat(residual_chunks).tolist() if residual_chunks else []
         overall_metrics = {"mse": mse, "mae": mae, "rmse": rmse}
         per_step_metrics = {
@@ -228,6 +269,7 @@ class Evaluator:
             target_examples=example_targets,
             example_subject_ids=example_subject_ids,
             subject_metrics=subject_metrics,
+            activity_metrics=activity_metrics,
             complete_trials=complete_trials,
             checkpoint_path=str(checkpoint_path),
             tag="final",
@@ -237,6 +279,7 @@ class Evaluator:
             "overall": overall_metrics,
             "per_step": per_step_metrics,
             "subject": subject_metrics,
+            "activity": activity_metrics,
             "checkpoint_path": str(checkpoint_path),
         }
 

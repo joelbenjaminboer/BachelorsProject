@@ -6,3 +6,4 @@ processed_dir: "data/processed/ENABL3S"
 original_freq: 500
 target_freq: 100
 use_both_legs: false
+anti_alias: true

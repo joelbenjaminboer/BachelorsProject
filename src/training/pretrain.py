@@ -7,7 +7,6 @@ import torch
 from tqdm import tqdm
 
 from src.models.factory import build_loss, build_optimizer
-from src.training.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
 from src.runtime import (
     RunContext,
     autocast_context,
@@ -15,6 +14,7 @@ from src.runtime import (
     build_grad_scaler,
     unwrap_model,
 )
+from src.training.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
 
 CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
 
@@ -52,13 +52,22 @@ def build_contiguous_block_mask(
 
     # torch.randint does not support per-element upper bounds; use scaled random samples.
     start_positions = (
-        torch.rand(batch_size, device=device) * (max_start_positions + 1).float()
-    ).floor().long()
+        (torch.rand(batch_size, device=device) * (max_start_positions + 1).float()).floor().long()
+    )
 
     time_indices = torch.arange(seq_length, device=device).unsqueeze(0)
     return (time_indices >= start_positions.unsqueeze(1)) & (
         time_indices < (start_positions + block_lengths).unsqueeze(1)
     )
+
+
+def build_random_mask(
+    batch_size: int,
+    seq_length: int,
+    mask_ratio: float,
+    device: torch.device,
+):
+    return torch.rand(batch_size, seq_length, device=device) < mask_ratio
 
 
 def evaluate_masked_reconstruction(
@@ -71,6 +80,8 @@ def evaluate_masked_reconstruction(
     seq_length,
     mask_block_min_len,
     mask_block_max_len,
+    mask_type,
+    mask_ratio,
     epoch,
     epochs,
     phase_label,
@@ -87,14 +98,20 @@ def evaluate_masked_reconstruction(
     with torch.inference_mode():
         for batch in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{epochs} [{phase_label}]"):
             past_imu = batch["past_imu"].to(device, non_blocking=non_blocking_transfer)
+            B = past_imu.size(0)
 
-            mask = build_contiguous_block_mask(
-                batch_size=past_imu.size(0),
-                seq_length=seq_length,
-                min_block_len=mask_block_min_len,
-                max_block_len=mask_block_max_len,
-                device=device,
-            )
+            if mask_type == "random":
+                mask = build_random_mask(B, seq_length, mask_ratio, device)
+            elif mask_type == "mixed":
+                block = build_contiguous_block_mask(
+                    B, seq_length, mask_block_min_len, mask_block_max_len, device
+                )
+                rand = build_random_mask(B, seq_length, mask_ratio / 2, device)
+                mask = block | rand
+            else:
+                mask = build_contiguous_block_mask(
+                    B, seq_length, mask_block_min_len, mask_block_max_len, device
+                )
 
             with autocast_context(autocast_kwargs):
                 reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
@@ -130,25 +147,72 @@ class Pretrainer:
         self.autocast_kwargs = ctx.autocast_kwargs
         self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
 
-        self.seq_length = cfg.training.context_length
         self.epochs = cfg.training.epochs
 
         self.criterion = build_loss(cfg)
         self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
 
-        raw_min = int(cfg.training.get("mask_block_min_len", 10))
-        raw_max = int(cfg.training.get("mask_block_max_len", 20))
-        self.mask_block_min_len = min(raw_min, raw_max)
-        self.mask_block_max_len = max(raw_min, raw_max)
+        # Effective sequence length: reduced when using patch embedding
+        raw_seq = cfg.training.context_length
+        patch_size = None
+        if hasattr(cfg.model, "encoder"):
+            raw_patch = cfg.model.encoder.get("patch_size", None)
+            patch_size = int(raw_patch) if raw_patch is not None else None
+        self.seq_length = raw_seq // patch_size if patch_size else raw_seq
+
+        # Mask configuration: percentage-based or absolute block lengths
+        self.mask_ratio = float(cfg.training.get("mask_ratio", 0.0))
+        self.mask_type = str(cfg.training.get("mask_type", "block")).lower()
+
+        if self.mask_ratio > 0.0:
+            target = int(self.mask_ratio * self.seq_length)
+            self.mask_block_min_len = max(1, int(target * 0.8))
+            self.mask_block_max_len = max(self.mask_block_min_len, int(target * 1.2))
+        else:
+            raw_min = int(cfg.training.get("mask_block_min_len", 10))
+            raw_max = int(cfg.training.get("mask_block_max_len", 20))
+            self.mask_block_min_len = min(raw_min, raw_max)
+            self.mask_block_max_len = max(raw_min, raw_max)
+
+        logger.info(
+            "MAE mask config: type={} ratio={:.0%} block_len={}-{} seq_len={}",
+            self.mask_type,
+            self.mask_ratio if self.mask_ratio > 0 else self.mask_block_max_len / self.seq_length,
+            self.mask_block_min_len,
+            self.mask_block_max_len,
+            self.seq_length,
+        )
 
         self.best_val_loss = float("inf")
         self.best_epoch = None
         self.best_checkpoint_path = None
 
+    def _build_mask(self, batch_size: int) -> torch.Tensor:
+        if self.mask_type == "random":
+            return build_random_mask(batch_size, self.seq_length, self.mask_ratio, self.device)
+        if self.mask_type == "mixed":
+            block = build_contiguous_block_mask(
+                batch_size,
+                self.seq_length,
+                self.mask_block_min_len,
+                self.mask_block_max_len,
+                self.device,
+            )
+            rand = build_random_mask(batch_size, self.seq_length, self.mask_ratio / 2, self.device)
+            return block | rand
+        return build_contiguous_block_mask(
+            batch_size,
+            self.seq_length,
+            self.mask_block_min_len,
+            self.mask_block_max_len,
+            self.device,
+        )
+
     def run(self):
         logger.info(
-            "Starting MAE Pretraining with contiguous block masking "
-            f"(length range: {self.mask_block_min_len}-{self.mask_block_max_len})"
+            "Starting MAE Pretraining with {} masking "
+            f"(length range: {self.mask_block_min_len}-{self.mask_block_max_len})",
+            self.mask_type,
         )
 
         train_loss_history = []
@@ -172,13 +236,7 @@ class Pretrainer:
                     self.device,
                     non_blocking=self.ctx.non_blocking_transfer,
                 )
-                mask = build_contiguous_block_mask(
-                    batch_size=past_imu.size(0),
-                    seq_length=self.seq_length,
-                    min_block_len=self.mask_block_min_len,
-                    max_block_len=self.mask_block_max_len,
-                    device=self.device,
-                )
+                mask = self._build_mask(past_imu.size(0))
 
                 with autocast_context(self.autocast_kwargs):
                     reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
@@ -224,6 +282,8 @@ class Pretrainer:
                 seq_length=self.seq_length,
                 mask_block_min_len=self.mask_block_min_len,
                 mask_block_max_len=self.mask_block_max_len,
+                mask_type=self.mask_type,
+                mask_ratio=self.mask_ratio,
                 epoch=epoch,
                 epochs=self.epochs,
                 phase_label="Val",
@@ -267,9 +327,7 @@ class Pretrainer:
                     self.ctx.version,
                 )
                 os.makedirs(save_dir, exist_ok=True)
-                checkpoint_path = os.path.join(
-                    save_dir, f"best_pretrained_epoch_{epoch + 1}.pth"
-                )
+                checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
                 torch.save(unwrap_model(self.model).state_dict(), checkpoint_path)
                 logger.info(f"Saved new best pretrained checkpoint to {checkpoint_path}")
                 self.best_checkpoint_path = checkpoint_path

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class IMU_Intent_Encoder(nn.Module):
@@ -13,10 +14,16 @@ class IMU_Intent_Encoder(nn.Module):
         dim_feedforward,
         positional_encoding_max_len,
         positional_encoding_base,
-        dropout=0.1
+        dropout=0.1,
+        pooling="cls",
+        patch_size=None,
     ):
         super(IMU_Intent_Encoder, self).__init__()
-        self.input_projection = nn.Linear(input_features, d_model)
+        self.patch_size = patch_size
+        self.pooling = pooling
+
+        proj_input_dim = input_features * patch_size if patch_size else input_features
+        self.input_projection = nn.Linear(proj_input_dim, d_model)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         self.positional_layer = PositionalEncoding(
@@ -24,35 +31,44 @@ class IMU_Intent_Encoder(nn.Module):
             max_len=positional_encoding_max_len,
             base=positional_encoding_base,
         )
-        
-        # Added dropout after positional encoding
-        self.pos_drop = nn.Dropout(p=dropout) 
 
-        # Set norm_first=True for Pre-Norm stability
+        self.pos_drop = nn.Dropout(p=dropout)
+
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, 
-            nhead=num_heads, 
-            batch_first=True, 
+            d_model=d_model,
+            nhead=num_heads,
+            batch_first=True,
             dim_feedforward=dim_feedforward,
-            norm_first=True, 
-            dropout=dropout
+            norm_first=True,
+            dropout=dropout,
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # Final LayerNorm before the heads
         self.norm = nn.LayerNorm(d_model)
 
         self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
-        self.reconstruction_head = nn.Linear(d_model, input_features)
+
+        recon_out_dim = input_features * patch_size if patch_size else input_features
+        self.reconstruction_head = nn.Linear(d_model, recon_out_dim)
 
         self.regression_head = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
-            nn.ReLU(),
-            nn.Dropout(dropout), # Good practice in the MLP head
+            nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(dim_feedforward, forecast_horizon),
         )
 
+    def _patchify(self, x: torch.Tensor) -> torch.Tensor:
+        """[B, T, C] -> [B, T//P, P*C], dropping any tail remainder."""
+        B, T, C = x.shape
+        P = self.patch_size
+        n_patches = T // P
+        return x[:, : n_patches * P, :].reshape(B, n_patches, P * C)
+
     def forward(self, x, mask=None, task="reconstruct"):
+        if self.patch_size:
+            x = self._patchify(x)
+
         x = self.input_projection(x)
 
         if mask is not None:
@@ -60,17 +76,24 @@ class IMU_Intent_Encoder(nn.Module):
             x = torch.where(expanded_mask, self.mask_token.to(dtype=x.dtype), x)
 
         cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1) 
+        x = torch.cat((cls_tokens, x), dim=1)
 
         x = self.positional_layer(x)
         x = self.pos_drop(x)
 
         encoded_x = self.transformer_encoder(x)
-
         encoded_x = self.norm(encoded_x)
-        
+
         if task == "predict":
-            pooled = encoded_x[:, 0, :]
+            if self.pooling == "cls":
+                pooled = encoded_x[:, 0, :]
+            elif self.pooling == "mean":
+                pooled = encoded_x[:, 1:, :].mean(dim=1)
+            elif self.pooling.startswith("last_"):
+                k = int(self.pooling.split("_")[-1])
+                pooled = encoded_x[:, -k:, :].mean(dim=1)
+            else:
+                raise ValueError(f"Unknown pooling mode: {self.pooling!r}")
             return self.regression_head(pooled)
 
         if task == "reconstruct":

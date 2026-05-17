@@ -5,5 +5,8 @@ pretrain: false
 train: false
 eval: false
 
+all_folds: false
+all_folds_workers: 1
+
 load_checkpoint: false
 checkpoint_path: "checkpoints/pretrain/long-pretrain+znormalize/best_pretrained_epoch_4.pth"

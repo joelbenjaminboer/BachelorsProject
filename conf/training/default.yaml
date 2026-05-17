@@ -1,5 +1,9 @@
-epochs: 5
+epochs: 100
 freeze_encoder_epochs: 2  # phase 1: train head only; 0 to disable
+
+early_stopping:
+  patience: 15        # stop after this many epochs without improvement
+  min_delta: 1.0e-4   # minimum change to count as improvement
 batch_size: 64
 num_workers: null
 persistent_workers: null
@@ -10,8 +14,21 @@ split_ratio: 0.9  # 90/10 train/val split
 split_strategy: "loso"
 holdout_subjects: ["AB194"]
 split_seed: 42
-context_length: 125
-forecast_horizon: 10
+context_length: 250
+forecast_horizon: 100
 
 mask_block_min_len: 10
 mask_block_max_len: 20
+mask_ratio: 0.5    # fractional target (0.0 = use absolute mask_block_min/max_len)
+mask_type: block   # block / random / mixed
+
+stratified_val: false
+
+augmentation:
+  enabled: false
+  jitter_sigma: 0.02
+  scale_lo: 0.9
+  scale_hi: 1.1
+  time_warp_sigma: 0.05
+  rotation_sigma: 0.1
+  channel_drop_p: 0.1

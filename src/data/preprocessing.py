@@ -9,22 +9,33 @@ from loguru import logger
 import numpy as np
 from omegaconf import DictConfig
 import pandas as pd
-from scipy.signal import resample
 from tqdm import tqdm
 
 
-def save_fold_to_hdf5(file_path, X_train, y_train, X_val, y_val, X_test, y_test):
+def save_fold_to_hdf5(
+    file_path,
+    X_train,
+    y_train,
+    act_train,
+    X_val,
+    y_val,
+    act_val,
+    X_test,
+    y_test,
+    act_test,
+):
     with h5py.File(file_path, "w") as f:
 
-        def save_group(group_name, X_list, y_list):
+        def save_group(group_name, X_list, y_list, a_list):
             grp = f.create_group(group_name)
-            for i, (x, y) in enumerate(zip(X_list, y_list)):
+            for i, (x, y, a) in enumerate(zip(X_list, y_list, a_list)):
                 grp.create_dataset(f"X_{i}", data=x, compression="gzip")
                 grp.create_dataset(f"y_{i}", data=y, compression="gzip")
+                grp.create_dataset(f"a_{i}", data=a, compression="gzip")
 
-        save_group("train", X_train, y_train)
-        save_group("val", X_val, y_val)
-        save_group("test", X_test, y_test)
+        save_group("train", X_train, y_train, act_train)
+        save_group("val", X_val, y_val, act_val)
+        save_group("test", X_test, y_test, act_test)
 
 
 class IMUPreprocessor:
@@ -36,12 +47,14 @@ class IMUPreprocessor:
         original_freq=500,
         target_freq=100,
         use_both_legs=False,
+        anti_alias=True,
     ):
         self.root_dir = root_dir
         self.window_size = window_size
         self.horizon = horizon
         self.downsample_factor = original_freq // target_freq
         self.use_both_legs = use_both_legs
+        self.anti_alias = anti_alias
         self.leg_configs = {
             "right": {
                 "predictors": [
@@ -68,6 +81,21 @@ class IMUPreprocessor:
         }
         self.predictors = self.leg_configs["right"]["predictors"]
         self.target = self.leg_configs["right"]["target"]
+
+    def _downsample(self, arr: np.ndarray, axis: int = 0) -> np.ndarray:
+        if self.downsample_factor <= 1:
+            return arr
+        if self.anti_alias:
+            from scipy.signal import decimate
+
+            return decimate(
+                arr, q=self.downsample_factor, ftype="iir", zero_phase=True, axis=axis
+            ).copy()
+        else:
+            from scipy.signal import resample
+
+            n = arr.shape[axis] // self.downsample_factor
+            return resample(arr, num=n, axis=axis)
 
     def _load_and_process_csv_from_zip(self, zip_file, member_name, leg="right"):
         with zip_file.open(member_name) as handle:
@@ -96,12 +124,21 @@ class IMUPreprocessor:
 
         X = df[predictors].values
         y = df[target].values.reshape(-1, 1)
+        mode_ids = df["Mode"].values.astype(np.int8)
 
         if self.downsample_factor > 1:
-            X = resample(X, num=X.shape[0] // self.downsample_factor, axis=0)
-            y = resample(y, num=y.shape[0] // self.downsample_factor, axis=0)
+            X = self._downsample(X, axis=0)
+            y = self._downsample(y, axis=0)
+            # For mode labels, take every Nth sample (nearest-neighbor, no filtering needed)
+            mode_ids = mode_ids[:: self.downsample_factor]
 
-        return X, y
+        # Align lengths after downsampling (decimate may differ by 1 sample)
+        min_len = min(len(X), len(y), len(mode_ids))
+        X = X[:min_len]
+        y = y[:min_len]
+        mode_ids = mode_ids[:min_len]
+
+        return X, y, mode_ids
 
     def _get_subject_sources(self):
         subject_sources = {}
@@ -110,12 +147,13 @@ class IMUPreprocessor:
             subject_sources.setdefault(subject_id, (subject_id, subject_zip))
         return sorted(subject_sources.values(), key=lambda item: item[0])
 
-    def create_sliding_windows(self, X, y):
-        Xw, yw = [], []
+    def create_sliding_windows(self, X, y, activity_ids):
+        Xw, yw, aw = [], [], []
         for i in range(len(X) - self.window_size - self.horizon):
             Xw.append(X[i : i + self.window_size])
             yw.append(y[i + self.window_size : i + self.window_size + self.horizon, 0])
-        return np.array(Xw), np.array(yw)
+            aw.append(int(activity_ids[i]))
+        return np.array(Xw), np.array(yw), np.array(aw, dtype=np.int8)
 
     def run(self, output_dir):
         os.makedirs(output_dir, exist_ok=True)
@@ -139,20 +177,23 @@ class IMUPreprocessor:
                 trial_files = trial_files[:40]
 
                 legs_to_process = ["right", "left"] if self.use_both_legs else ["right"]
-                Xw_trials, yw_trials = [], []
+                Xw_trials, yw_trials, aw_trials = [], [], []
                 for f in trial_files:
                     try:
                         for leg in legs_to_process:
-                            X_raw, y_raw = self._load_and_process_csv_from_zip(archive, f, leg=leg)
-                            Xw, yw = self.create_sliding_windows(X_raw, y_raw)
+                            X_raw, y_raw, mode_ids = self._load_and_process_csv_from_zip(
+                                archive, f, leg=leg
+                            )
+                            Xw, yw, aw = self.create_sliding_windows(X_raw, y_raw, mode_ids)
                             if len(Xw) > 0:
                                 Xw_trials.append(Xw)
                                 yw_trials.append(yw)
+                                aw_trials.append(aw)
                     except Exception as e:
                         logger.warning(f"Skipped {f}: {e}")
 
                 if Xw_trials:
-                    subject_data[subj_id] = (Xw_trials, yw_trials)
+                    subject_data[subj_id] = (Xw_trials, yw_trials, aw_trials)
 
         valid_subject_ids = list(subject_data.keys())
         if not valid_subject_ids:
@@ -161,28 +202,40 @@ class IMUPreprocessor:
 
         logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
         for i, test_subj in enumerate(valid_subject_ids):
-            X_test, y_test = subject_data[test_subj]
+            X_test, y_test, act_test = subject_data[test_subj]
             train_subjs = [s for s in valid_subject_ids if s != test_subj]
 
-            X_train_trials, y_train_trials = [], []
+            X_train_trials, y_train_trials, act_train_trials = [], [], []
             for subj in train_subjs:
-                X_trials, y_trials = subject_data[subj]
+                X_trials, y_trials, a_trials = subject_data[subj]
                 X_train_trials.extend(X_trials)
                 y_train_trials.extend(y_trials)
+                act_train_trials.extend(a_trials)
 
             n_total = len(X_train_trials)
             n_val = max(1, int(0.1 * n_total))
 
             X_val = X_train_trials[:n_val]
             y_val = y_train_trials[:n_val]
+            act_val = act_train_trials[:n_val]
             X_train = X_train_trials[n_val:]
             y_train = y_train_trials[n_val:]
+            act_train = act_train_trials[n_val:]
 
             fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
             os.makedirs(fold_dir, exist_ok=True)
 
             save_fold_to_hdf5(
-                os.path.join(fold_dir, "data.h5"), X_train, y_train, X_val, y_val, X_test, y_test
+                os.path.join(fold_dir, "data.h5"),
+                X_train,
+                y_train,
+                act_train,
+                X_val,
+                y_val,
+                act_val,
+                X_test,
+                y_test,
+                act_test,
             )
         logger.success(f"Successfully generated HDF5 folds in {output_dir}")
 
@@ -197,6 +250,9 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
     original_freq = cfg.dataset.get("original_freq", 500)
     target_freq = cfg.dataset.get("target_freq", 100)
     use_both_legs = cfg.dataset.get("use_both_legs", False)
+    anti_alias = cfg.dataset.get("anti_alias", True)
+
+    logger.info("Preprocessing: anti_alias={}", anti_alias)
 
     preprocessor = IMUPreprocessor(
         root_dir=extract_dir,
@@ -205,6 +261,7 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
         original_freq=original_freq,
         target_freq=target_freq,
         use_both_legs=use_both_legs,
+        anti_alias=anti_alias,
     )
     preprocessor.run(processed_dir)
 

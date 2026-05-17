@@ -7,7 +7,6 @@ import torch
 from tqdm import tqdm
 
 from src.models.factory import build_loss, build_optimizer, build_scheduler
-from src.training.plotting import save_train_artifacts, should_save_intermediate_epoch
 from src.runtime import (
     RunContext,
     autocast_context,
@@ -15,6 +14,7 @@ from src.runtime import (
     build_grad_scaler,
     unwrap_model,
 )
+from src.training.plotting import save_train_artifacts, should_save_intermediate_epoch
 
 
 class Trainer:
@@ -28,8 +28,12 @@ class Trainer:
 
         self.epochs = cfg.training.epochs
 
+        es_cfg = cfg.training.get("early_stopping", {})
+        self.early_stop_patience = int(es_cfg.get("patience", 0))
+        self.early_stop_min_delta = float(es_cfg.get("min_delta", 0.0))
+
         self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
-        self.scheduler = build_scheduler(cfg, self.optimizer)
+        self.scheduler = build_scheduler(cfg, self.optimizer, total_epochs=self.epochs)
         self.criterion = build_loss(cfg)
 
         self.best_val_loss = float("inf")
@@ -56,19 +60,21 @@ class Trainer:
     def _begin_freeze_phase(self, freeze_epochs: int):
         self._set_encoder_grad(False)
         head_params = [
-            p for name, p in unwrap_model(self.model).named_parameters()
+            p
+            for name, p in unwrap_model(self.model).named_parameters()
             if name.startswith("regression_head")
         ]
         self.optimizer = build_optimizer(self.cfg, head_params, device=self.device)
-        self.scheduler = build_scheduler(self.cfg, self.optimizer)
+        self.scheduler = build_scheduler(self.cfg, self.optimizer, total_epochs=freeze_epochs)
         logger.info(
             f"Phase 1: encoder frozen, training regression head for {freeze_epochs} epoch(s)"
         )
 
-    def _begin_finetune_phase(self):
+    def _begin_finetune_phase(self, freeze_epochs: int):
         self._set_encoder_grad(True)
         self.optimizer = build_optimizer(self.cfg, self.model.parameters(), device=self.device)
-        self.scheduler = build_scheduler(self.cfg, self.optimizer)
+        finetune_epochs = self.epochs - freeze_epochs
+        self.scheduler = build_scheduler(self.cfg, self.optimizer, total_epochs=finetune_epochs)
         logger.info("Phase 2: full model fine-tuning")
 
     def _train_epoch(self, epoch: int) -> float:
@@ -142,6 +148,14 @@ class Trainer:
         logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
         self.best_checkpoint_path = checkpoint_path
 
+    def _step_scheduler(self, val_loss: float):
+        if self.scheduler is None:
+            return
+        if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            self.scheduler.step(val_loss)
+        else:
+            self.scheduler.step()
+
     def run(self):
         freeze_epochs = self._resolve_freeze_epochs()
         if freeze_epochs > 0:
@@ -149,16 +163,17 @@ class Trainer:
 
         train_loss_history = []
         val_loss_history = []
+        epochs_no_improve = 0
 
         for epoch in range(self.epochs):
             if freeze_epochs > 0 and epoch == freeze_epochs:
-                self._begin_finetune_phase()
+                self._begin_finetune_phase(freeze_epochs)
+                epochs_no_improve = 0  # reset counter when fine-tuning starts
 
             train_loss = self._train_epoch(epoch)
             val_loss = self._validate_epoch(epoch)
 
-            if self.scheduler is not None:
-                self.scheduler.step(val_loss)
+            self._step_scheduler(val_loss)
 
             current_lr = self.optimizer.param_groups[0]["lr"]
             logger.info(
@@ -169,7 +184,19 @@ class Trainer:
             train_loss_history.append(float(train_loss))
             val_loss_history.append(float(val_loss))
 
+            improved = val_loss < self.best_val_loss - self.early_stop_min_delta
             self._save_if_best(val_loss, epoch)
+
+            if improved:
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if self.early_stop_patience > 0 and epochs_no_improve >= self.early_stop_patience:
+                    logger.info(
+                        f"Early stopping: no improvement for {self.early_stop_patience} epochs "
+                        f"(best val loss {self.best_val_loss:.4f} at epoch {self.best_epoch})"
+                    )
+                    break
 
             if should_save_intermediate_epoch(self.cfg, epoch):
                 save_train_artifacts(

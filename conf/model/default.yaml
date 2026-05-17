@@ -3,14 +3,16 @@ supports_pretrain: true
 
 encoder:
   input_features: 6
-  d_model: 128
-  num_heads: 4
-  num_layers: 3
-  dim_feedforward: 512
+  d_model: 256
+  num_heads: 8
+  num_layers: 6
+  dim_feedforward: 1024
   dropout: 0.1
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0
+  pooling: cls       # cls / mean / last_25
+  patch_size: null   # null / 8 / 16 / 25
 
 optimizer:
   name: adamw
@@ -20,11 +22,11 @@ optimizer:
   eps: 1.0e-8
 
 loss:
-  name: mse
+  name: huber
   reduction: mean
+  delta: 1.0  # transition point from quadratic to linear (in normalised target units)
 
 scheduler:
-  name: reduce_on_plateau
-  factor: 0.5
-  patience: 5
+  name: cosine_warmup
+  warmup_epochs: 5  # linear ramp from 1% → 100% of lr
   min_lr: 1.0e-6

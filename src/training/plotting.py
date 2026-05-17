@@ -320,6 +320,7 @@ def save_eval_artifacts(
     target_examples: Sequence[Sequence[float]],
     example_subject_ids: Sequence[str],
     subject_metrics: dict[str, dict[str, float]],
+    activity_metrics: dict[str, dict[str, float]] | None = None,
     complete_trials: Sequence[dict] | None = None,
     checkpoint_path: str = "",
     tag: str = "final",
@@ -341,6 +342,7 @@ def save_eval_artifacts(
             "std": float(np.std(residuals)) if len(residuals) > 0 else float("nan"),
         },
         "subject_metrics": subject_metrics,
+        "activity_metrics": activity_metrics or {},
         "example_subject_ids": list(example_subject_ids),
     }
     metrics_path = _save_metrics_json(cfg, stage_dir, f"metrics_{tag}.json", payload)

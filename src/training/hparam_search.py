@@ -3,10 +3,10 @@
 import gc
 import json
 
-import optuna
-import torch
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+import optuna
+import torch
 
 from src.models.factory import build_and_prepare_model
 from src.runtime import RunContext
@@ -99,6 +99,7 @@ def _run_trial(trial: optuna.Trial, cfg: DictConfig, ctx: RunContext, trial_epoc
 
     # Rebuild run context so each trial gets its own safe Thread/Process dataloaders
     from src.runtime import build_run_context
+
     trial_ctx = build_run_context(trial_cfg, ctx.version)
 
     logger.info("Trial {} starting | params: {}", trial.number, trial.params)

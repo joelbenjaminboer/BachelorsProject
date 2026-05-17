@@ -1,6 +1,6 @@
 import contextlib
-import os
 from dataclasses import dataclass
+import os
 from typing import Any, Optional
 
 import hydra
@@ -57,9 +57,21 @@ def resolve_device(cfg: DictConfig) -> torch.device:
 
 
 def configure_runtime(cfg: DictConfig, device: torch.device):
+    import random as _random
+
+    import numpy as _np
+
     gpu_cfg = _gpu_cfg(cfg)
     deterministic = _to_bool(gpu_cfg.get("deterministic", False))
     torch.use_deterministic_algorithms(deterministic, warn_only=True)
+
+    if deterministic:
+        seed = int(gpu_cfg.get("seed", 42))
+        torch.manual_seed(seed)
+        _np.random.seed(seed)
+        _random.seed(seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(seed)
 
     if device.type != "cuda":
         return
@@ -259,10 +271,13 @@ def build_run_context(cfg: DictConfig, version: str) -> RunContext:
         hydra.utils.to_absolute_path(cfg.dataset.processed_dir), f"fold_{holdout}"
     )
 
+    aug_cfg = dict(cfg.training.get("augmentation", {})) or None
+
     train_loader, val_loader, test_loader, split_info = build_dataloaders(
         data_dir=fold_dir,
         batch_size=cfg.training.batch_size,
         seed=cfg.training.get("split_seed", 42),
+        aug_cfg=aug_cfg,
         **loader_kwargs,
     )
 
@@ -308,9 +323,7 @@ def backward_and_step(
     else:
         loss_for_backward.backward()
 
-    should_step = ((batch_idx + 1) % accumulation_steps == 0) or (
-        batch_idx + 1 == total_batches
-    )
+    should_step = ((batch_idx + 1) % accumulation_steps == 0) or (batch_idx + 1 == total_batches)
     if not should_step:
         return False
 
