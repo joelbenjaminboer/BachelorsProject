@@ -29,6 +29,10 @@ class HDF5KneeDataset(Dataset):
         subject_id: str | None = None,
         is_train: bool = False,
         aug_cfg: dict | None = None,
+        multitask: bool = False,
+        y_vel: list[torch.Tensor] | None = None,
+        y_vel_mean=None,
+        y_vel_std=None,
     ):
         self.X = X
         self.y = y
@@ -40,6 +44,10 @@ class HDF5KneeDataset(Dataset):
         self.subject_id = subject_id
         self.is_train = is_train
         self.aug_cfg = aug_cfg or {}
+        self.multitask = multitask
+        self.y_vel = y_vel
+        self.y_vel_mean = y_vel_mean
+        self.y_vel_std = y_vel_std
 
         self.total_samples = 0
         self.cumulative_sizes = []
@@ -107,6 +115,10 @@ class HDF5KneeDataset(Dataset):
         past_imu = self.X[trial_idx][local_idx].float()
         future_knee = self.y[trial_idx][local_idx].float()
 
+        # Extract velocity before any normalisation (raw physical units)
+        if self.multitask and self.y_vel is not None:
+            future_knee_vel = self.y_vel[trial_idx][local_idx].float()
+
         if self.imu_mean is not None and self.imu_std is not None:
             past_imu = (past_imu - self.imu_mean) / self.imu_std
 
@@ -117,6 +129,11 @@ class HDF5KneeDataset(Dataset):
             future_knee = (future_knee - self.y_mean) / self.y_std
 
         out = {"past_imu": past_imu, "future_knee": future_knee}
+
+        if self.multitask and self.y_vel is not None:
+            if self.y_vel_mean is not None and self.y_vel_std is not None:
+                future_knee_vel = (future_knee_vel - self.y_vel_mean) / self.y_vel_std
+            out["future_knee_vel"] = future_knee_vel
 
         if self.activity is not None:
             out["activity_id"] = int(self.activity[trial_idx][local_idx].item())
@@ -131,7 +148,7 @@ def load_trials_from_hdf5(filepath: str):
     with h5py.File(filepath, "r") as f:
 
         def load_group(group):
-            X_list, y_list, a_list = [], [], []
+            X_list, y_list, yv_list, a_list = [], [], [], []
             for key in sorted(f[group].keys()):
                 if key.startswith("X_"):
                     idx = key.split("_")[1]
@@ -139,17 +156,25 @@ def load_trials_from_hdf5(filepath: str):
                     y = torch.tensor(f[f"{group}/y_{idx}"][:])
                     X_list.append(X)
                     y_list.append(y)
+
+                    yv_key = f"{group}/yv_{idx}"
+                    yv_list.append(torch.tensor(f[yv_key][:]) if yv_key in f else None)
+
                     a_key = f"{group}/a_{idx}"
                     if a_key in f:
                         a_list.append(torch.tensor(f[a_key][:]))
                     else:
                         a_list.append(None)
-            return X_list, y_list, a_list
+            return X_list, y_list, yv_list, a_list
 
-        X_train, y_train, act_train = load_group("train")
-        X_val, y_val, act_val = load_group("val")
-        X_test, y_test, act_test = load_group("test")
-        return X_train, y_train, act_train, X_val, y_val, act_val, X_test, y_test, act_test
+        X_train, y_train, yv_train, act_train = load_group("train")
+        X_val, y_val, yv_val, act_val = load_group("val")
+        X_test, y_test, yv_test, act_test = load_group("test")
+        return (
+            X_train, y_train, yv_train, act_train,
+            X_val, y_val, yv_val, act_val,
+            X_test, y_test, yv_test, act_test,
+        )
 
 
 def _compute_train_y_stats(y_train: list[torch.Tensor]):
@@ -160,6 +185,20 @@ def _compute_train_y_stats(y_train: list[torch.Tensor]):
     std = torch.clamp(std, min=1e-8)
     logger.debug(
         "y_train stats — mean: {:.2f}°, std: {:.2f}° (physiological range: mean 15–30°, std 20–35°)",
+        mean.item(),
+        std.item(),
+    )
+    return mean, std
+
+
+def _compute_train_yvel_stats(yv_train: list[torch.Tensor]):
+    """Calculates Z-score statistics for knee velocity over the training subset only."""
+    all_yv = torch.cat(yv_train, dim=0).float()
+    mean = all_yv.mean()
+    std = all_yv.std()
+    std = torch.clamp(std, min=1e-8)
+    logger.debug(
+        "y_vel stats — mean: {:.4f} deg/s, std: {:.4f} deg/s",
         mean.item(),
         std.item(),
     )
@@ -193,18 +232,29 @@ def build_dataloaders(
     pin_memory: Optional[bool] = None,
     prefetch_factor: Optional[int] = None,
     aug_cfg: Optional[dict] = None,
+    multitask: bool = False,
 ):
     data_file = Path(data_dir) / "data.h5"
     if not data_file.exists():
         raise FileNotFoundError(f"data.h5 not found in {data_dir}. Run preprocessing first.")
 
-    X_train, y_train, act_train, X_val, y_val, act_val, X_test, y_test, act_test = (
-        load_trials_from_hdf5(str(data_file))
-    )
+    (
+        X_train, y_train, yv_train, act_train,
+        X_val, y_val, yv_val, act_val,
+        X_test, y_test, yv_test, act_test,
+    ) = load_trials_from_hdf5(str(data_file))
 
     logger.info("Computing IMU standard scaling from training subset")
     imu_mean, imu_std = _compute_train_imu_stats(X_train)
     y_mean, y_std = _compute_train_y_stats(y_train)
+
+    yv_train_clean = _none_free(yv_train) if multitask else None
+    yv_val_clean = _none_free(yv_val) if multitask else None
+    yv_test_clean = _none_free(yv_test) if multitask else None
+
+    y_vel_mean = y_vel_std = None
+    if multitask and yv_train_clean:
+        y_vel_mean, y_vel_std = _compute_train_yvel_stats(yv_train_clean)
 
     subject_id = Path(data_dir).name.replace("fold_", "")
 
@@ -228,6 +278,10 @@ def build_dataloaders(
         activity=act_train_clean,
         is_train=True,
         aug_cfg=aug_cfg,
+        multitask=multitask,
+        y_vel=yv_train_clean,
+        y_vel_mean=y_vel_mean,
+        y_vel_std=y_vel_std,
     )
     val_dataset = HDF5KneeDataset(
         X_val,
@@ -237,6 +291,10 @@ def build_dataloaders(
         y_mean,
         y_std,
         activity=act_val_clean,
+        multitask=multitask,
+        y_vel=yv_val_clean,
+        y_vel_mean=y_vel_mean,
+        y_vel_std=y_vel_std,
     )
     test_dataset = HDF5KneeDataset(
         X_test,
@@ -247,6 +305,10 @@ def build_dataloaders(
         y_std,
         activity=act_test_clean,
         subject_id=subject_id,
+        multitask=multitask,
+        y_vel=yv_test_clean,
+        y_vel_mean=y_vel_mean,
+        y_vel_std=y_vel_std,
     )
 
     if num_workers is None:
@@ -287,5 +349,9 @@ def build_dataloaders(
         "y_mean": y_mean.item(),
         "y_std": y_std.item(),
     }
+
+    if y_vel_mean is not None:
+        split_info["y_vel_mean"] = y_vel_mean.item()
+        split_info["y_vel_std"] = y_vel_std.item()
 
     return train_loader, val_loader, test_loader, split_info

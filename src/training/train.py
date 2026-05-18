@@ -36,13 +36,18 @@ class Trainer:
         self.scheduler = build_scheduler(cfg, self.optimizer, total_epochs=self.epochs)
         self.criterion = build_loss(cfg)
 
+        self.vel_loss_weight = float(
+            cfg.model.get("multitask", {}).get("velocity_loss_weight", 0.1)
+        )
+
         self.best_val_loss = float("inf")
         self.best_epoch = None
         self.best_checkpoint_path = None
 
     def _set_encoder_grad(self, requires_grad: bool):
+        _HEADS = ("regression_head", "velocity_head")
         for name, param in unwrap_model(self.model).named_parameters():
-            if not name.startswith("regression_head"):
+            if not any(name.startswith(h) for h in _HEADS):
                 param.requires_grad_(requires_grad)
 
     def _resolve_freeze_epochs(self) -> int:
@@ -59,10 +64,11 @@ class Trainer:
 
     def _begin_freeze_phase(self, freeze_epochs: int):
         self._set_encoder_grad(False)
+        _HEADS = ("regression_head", "velocity_head")
         head_params = [
             p
             for name, p in unwrap_model(self.model).named_parameters()
-            if name.startswith("regression_head")
+            if any(name.startswith(h) for h in _HEADS)
         ]
         self.optimizer = build_optimizer(self.cfg, head_params, device=self.device)
         self.scheduler = build_scheduler(self.cfg, self.optimizer, total_epochs=freeze_epochs)
@@ -94,8 +100,17 @@ class Trainer:
             )
 
             with autocast_context(self.autocast_kwargs):
-                predictions = self.model(past_imu, task="predict")
-                loss = self.criterion(predictions, future_knee)
+                output = self.model(past_imu, task="predict")
+                if isinstance(output, tuple):
+                    angle_pred, vel_pred = output
+                    angle_loss = self.criterion(angle_pred, future_knee)
+                    fkv = batch["future_knee_vel"].to(
+                        self.device, non_blocking=self.ctx.non_blocking_transfer
+                    )
+                    vel_loss = self.criterion(vel_pred, fkv)
+                    loss = angle_loss + self.vel_loss_weight * vel_loss
+                else:
+                    loss = self.criterion(output, future_knee)
 
             backward_and_step(
                 loss=loss,
@@ -126,8 +141,9 @@ class Trainer:
                     self.device, non_blocking=self.ctx.non_blocking_transfer
                 )
                 with autocast_context(self.autocast_kwargs):
-                    predictions = self.model(past_imu, task="predict")
-                    loss = self.criterion(predictions, future_knee)
+                    output = self.model(past_imu, task="predict")
+                    angle_pred = output[0] if isinstance(output, tuple) else output
+                    loss = self.criterion(angle_pred, future_knee)
                 total_loss += loss.item()
 
         return total_loss / len(loader) if len(loader) > 0 else 0.0

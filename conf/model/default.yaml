@@ -30,3 +30,7 @@ scheduler:
   name: cosine_warmup
   warmup_epochs: 5  # linear ramp from 1% → 100% of lr
   min_lr: 1.0e-6
+
+multitask:
+  enabled: false
+  velocity_loss_weight: 0.1

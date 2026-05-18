@@ -17,10 +17,12 @@ class IMU_Intent_Encoder(nn.Module):
         dropout=0.1,
         pooling="cls",
         patch_size=None,
+        multitask=False,
     ):
         super(IMU_Intent_Encoder, self).__init__()
         self.patch_size = patch_size
         self.pooling = pooling
+        self.multitask = multitask
 
         proj_input_dim = input_features * patch_size if patch_size else input_features
         self.input_projection = nn.Linear(proj_input_dim, d_model)
@@ -58,6 +60,14 @@ class IMU_Intent_Encoder(nn.Module):
             nn.Linear(dim_feedforward, forecast_horizon),
         )
 
+        if multitask:
+            self.velocity_head = nn.Sequential(
+                nn.Linear(d_model, dim_feedforward),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(dim_feedforward, forecast_horizon),
+            )
+
     def _patchify(self, x: torch.Tensor) -> torch.Tensor:
         """[B, T, C] -> [B, T//P, P*C], dropping any tail remainder."""
         B, T, C = x.shape
@@ -94,7 +104,10 @@ class IMU_Intent_Encoder(nn.Module):
                 pooled = encoded_x[:, -k:, :].mean(dim=1)
             else:
                 raise ValueError(f"Unknown pooling mode: {self.pooling!r}")
-            return self.regression_head(pooled)
+            angle_pred = self.regression_head(pooled)
+            if self.multitask:
+                return angle_pred, self.velocity_head(pooled)
+            return angle_pred
 
         if task == "reconstruct":
             return self.reconstruction_head(encoded_x[:, 1:, :])

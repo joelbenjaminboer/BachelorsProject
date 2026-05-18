@@ -272,12 +272,14 @@ def build_run_context(cfg: DictConfig, version: str) -> RunContext:
     )
 
     aug_cfg = dict(cfg.training.get("augmentation", {})) or None
+    multitask_enabled = bool(cfg.model.get("multitask", {}).get("enabled", False))
 
     train_loader, val_loader, test_loader, split_info = build_dataloaders(
         data_dir=fold_dir,
         batch_size=cfg.training.batch_size,
         seed=cfg.training.get("split_seed", 42),
         aug_cfg=aug_cfg,
+        multitask=multitask_enabled,
         **loader_kwargs,
     )
 

@@ -84,6 +84,8 @@ class Evaluator:
                     )
                     with autocast_context(self.autocast_kwargs):
                         pred = self.model(x, task="predict")
+                    if isinstance(pred, tuple):
+                        pred = pred[0]  # angle only for visualisation
                     if y_mean is not None and y_std is not None:
                         pred = pred * y_std + y_mean
                     preds_parts.append(pred.squeeze(0).cpu())
@@ -129,8 +131,14 @@ class Evaluator:
         activity_absolute_error = defaultdict(float)
         activity_count = defaultdict(int)
 
+        vel_sq_err = 0.0
+        vel_abs_err = 0.0
+        vel_count = 0
+
         y_mean = self.ctx.split_info.get("y_mean")
         y_std = self.ctx.split_info.get("y_std")
+        y_vel_mean = self.ctx.split_info.get("y_vel_mean")
+        y_vel_std = self.ctx.split_info.get("y_vel_std")
 
         with torch.inference_mode():
             for batch in tqdm(self.ctx.test_loader, desc="Eval"):
@@ -142,7 +150,23 @@ class Evaluator:
                 )
 
                 with autocast_context(self.autocast_kwargs):
-                    predictions = self.model(past_imu, task="predict")
+                    output = self.model(past_imu, task="predict")
+
+                if isinstance(output, tuple):
+                    predictions, vel_predictions = output
+                    if y_vel_mean is not None and y_vel_std is not None:
+                        vel_predictions = vel_predictions * y_vel_std + y_vel_mean
+                    fkv = batch.get("future_knee_vel")
+                    if fkv is not None:
+                        fkv = fkv.to(self.device, non_blocking=self.ctx.non_blocking_transfer)
+                        if y_vel_mean is not None and y_vel_std is not None:
+                            fkv = fkv * y_vel_std + y_vel_mean
+                        v_errs = vel_predictions - fkv
+                        vel_sq_err += torch.sum(v_errs**2).item()
+                        vel_abs_err += torch.sum(v_errs.abs()).item()
+                        vel_count += v_errs.numel()
+                else:
+                    predictions = output
 
                 if y_mean is not None and y_std is not None:
                     predictions = predictions * y_std + y_mean
@@ -201,7 +225,7 @@ class Evaluator:
         per_step_mae = (per_step_absolute / per_step_count).detach().cpu()
         per_step_rmse = torch.sqrt(per_step_mse)
 
-        logger.info(f"Eval - MSE: {mse:.6f} | MAE: {mae:.6f} | RMSE: {rmse:.6f}")
+        logger.info(f"Angle - MSE: {mse:.6f} | MAE: {mae:.6f} | RMSE: {rmse:.6f}")
         for step in range(self.forecast_horizon):
             logger.info(
                 "Step {:02d} - MSE: {:.6f} | MAE: {:.6f} | RMSE: {:.6f}",
@@ -258,6 +282,16 @@ class Evaluator:
             "rmse": per_step_rmse.tolist(),
         }
 
+        velocity_metrics = {}
+        if vel_count > 0:
+            vel_mse = vel_sq_err / vel_count
+            vel_rmse = vel_mse**0.5
+            vel_mae = vel_abs_err / vel_count
+            logger.info(
+                f"Velocity - MSE: {vel_mse:.6f} | MAE: {vel_mae:.6f} | RMSE: {vel_rmse:.6f}"
+            )
+            velocity_metrics = {"mse": vel_mse, "mae": vel_mae, "rmse": vel_rmse}
+
         complete_trials = self._build_complete_trials(y_mean, y_std)
 
         save_eval_artifacts(
@@ -280,6 +314,7 @@ class Evaluator:
             "per_step": per_step_metrics,
             "subject": subject_metrics,
             "activity": activity_metrics,
+            "velocity": velocity_metrics,
             "checkpoint_path": str(checkpoint_path),
         }
 

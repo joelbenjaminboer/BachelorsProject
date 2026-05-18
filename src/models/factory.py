@@ -31,6 +31,7 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
         dropout=float(encoder_cfg.get("dropout", 0.1)),
         pooling=str(encoder_cfg.get("pooling", "cls")),
         patch_size=patch_size,
+        multitask=bool(cfg.model.get("multitask", {}).get("enabled", False)),
     )
 
 
