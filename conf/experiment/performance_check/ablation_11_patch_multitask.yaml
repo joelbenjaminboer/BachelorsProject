@@ -1,0 +1,22 @@
+# @package _global_
+# Patch embedding + mean pooling + multitask velocity head.
+# Two inductive biases combined: temporal patch structure + velocity supervision.
+# Requires reprocessed HDF5 with yv_* datasets.
+
+version: "ablation_11_patch_multitask"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    patch_size: 25
+    pooling: mean
+  multitask:
+    enabled: true
+    velocity_loss_weight: 0.1

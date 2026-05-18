@@ -1,0 +1,19 @@
+# @package _global_
+# PatchTST-style patch embedding: 250 timesteps → 10 patches of 25 steps each.
+# Reduces sequence length seen by the transformer, which can improve efficiency
+# and generalisation on time series.
+
+version: "ablation_07_patch25"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    patch_size: 25
+    pooling: cls

@@ -1,0 +1,18 @@
+# @package _global_
+# Multitask: velocity auxiliary head, low loss weight (0.1).
+# Requires reprocessed HDF5 with yv_* datasets.
+
+version: "ablation_02_multitask_low"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  multitask:
+    enabled: true
+    velocity_loss_weight: 0.1

@@ -1,0 +1,19 @@
+# @package _global_
+# Multitask: velocity auxiliary head, higher loss weight (0.3).
+# Compare angle RMSE vs ablation_02 to find the better weight.
+# Requires reprocessed HDF5 with yv_* datasets.
+
+version: "ablation_03_multitask_high"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  multitask:
+    enabled: true
+    velocity_loss_weight: 0.3

@@ -1,0 +1,15 @@
+# @package _global_
+# Data augmentation only (jitter, scaling, time warp, rotation, channel dropout).
+# No multitask. Tests whether augmentation alone helps angle RMSE.
+
+version: "ablation_04_augmentation"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+  augmentation:
+    enabled: true

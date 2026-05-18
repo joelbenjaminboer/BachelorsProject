@@ -1,0 +1,26 @@
+# @package _global_
+# Everything on: pretrain + patch + mean pool + multitask + augmentation.
+# Useful to know the ceiling before doing targeted ablations.
+# Requires reprocessed HDF5 with yv_* datasets.
+
+version: "ablation_12_kitchen_sink"
+
+run:
+  pretrain: true
+  train: true
+  eval: true
+
+training:
+  epochs: 10
+  mask_ratio: 0.5
+  mask_type: block
+  augmentation:
+    enabled: true
+
+model:
+  encoder:
+    patch_size: 25
+    pooling: mean
+  multitask:
+    enabled: true
+    velocity_loss_weight: 0.1

@@ -1,0 +1,21 @@
+# @package _global_
+# MAE pretraining (10 epochs) + multitask fine-tuning (10 epochs).
+# Tests whether a pretrained representation benefits more from velocity supervision.
+# Requires reprocessed HDF5 with yv_* datasets.
+
+version: "ablation_10_pretrain_multitask"
+
+run:
+  pretrain: true
+  train: true
+  eval: true
+
+training:
+  epochs: 10
+  mask_ratio: 0.5
+  mask_type: block
+
+model:
+  multitask:
+    enabled: true
+    velocity_loss_weight: 0.1

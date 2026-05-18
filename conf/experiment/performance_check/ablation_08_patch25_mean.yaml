@@ -1,0 +1,19 @@
+# @package _global_
+# Patch embedding (25 steps/patch) + mean pooling.
+# CLS token is less natural when all tokens are informative patches;
+# mean pooling aggregates the full temporal context.
+
+version: "ablation_08_patch25_mean"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    patch_size: 25
+    pooling: mean

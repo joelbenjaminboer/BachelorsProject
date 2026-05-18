@@ -1,0 +1,21 @@
+# @package _global_
+# Multitask + augmentation combined.
+# Tests whether the two improvements stack.
+# Requires reprocessed HDF5 with yv_* datasets.
+
+version: "ablation_05_multitask_aug"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+  augmentation:
+    enabled: true
+
+model:
+  multitask:
+    enabled: true
+    velocity_loss_weight: 0.1

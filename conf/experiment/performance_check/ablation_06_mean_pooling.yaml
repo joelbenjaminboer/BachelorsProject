@@ -1,0 +1,17 @@
+# @package _global_
+# Mean pooling over all patch tokens instead of CLS token.
+# Tests whether the CLS token is actually doing useful aggregation.
+
+version: "ablation_06_mean_pooling"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    pooling: mean

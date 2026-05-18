@@ -1,0 +1,15 @@
+# @package _global_
+# MAE pretraining (10 epochs) then supervised fine-tuning (10 epochs).
+# Block masking at 50% ratio. Total wall-time ≈ 2× ablation_01.
+
+version: "ablation_09_pretrain_block"
+
+run:
+  pretrain: true
+  train: true
+  eval: true
+
+training:
+  epochs: 10
+  mask_ratio: 0.5
+  mask_type: block

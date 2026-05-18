@@ -1,0 +1,12 @@
+# @package _global_
+# Baseline: train + eval, no extras. Reference point for all other ablations.
+
+version: "ablation_01_baseline"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
