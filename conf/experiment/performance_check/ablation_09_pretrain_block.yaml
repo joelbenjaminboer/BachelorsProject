@@ -5,6 +5,7 @@
 version: "ablation_09_pretrain_block"
 
 run:
+  hparam_search: false
   pretrain: true
   train: true
   eval: true

@@ -29,6 +29,7 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
         positional_encoding_max_len=int(positional_encoding_max_len),
         positional_encoding_base=float(encoder_cfg.positional_encoding_base),
         dropout=float(encoder_cfg.get("dropout", 0.1)),
+        head_dropout=float(encoder_cfg.get("head_dropout", 0.1)),
         pooling=str(encoder_cfg.get("pooling", "cls")),
         patch_size=patch_size,
         multitask=bool(cfg.model.get("multitask", {}).get("enabled", False)),

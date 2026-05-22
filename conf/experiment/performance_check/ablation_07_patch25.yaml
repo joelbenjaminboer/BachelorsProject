@@ -6,6 +6,7 @@
 version: "ablation_07_patch25"
 
 run:
+  hparam_search: false
   pretrain: false
   train: true
   eval: true

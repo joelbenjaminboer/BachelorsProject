@@ -4,11 +4,11 @@ deterministic: false
 seed: 42
 
 autocast:
-  enabled: false
-  dtype: float16
+  enabled: true
+  dtype: bfloat16
 
 compile:
-  enabled: false
+  enabled: true
   mode: max-autotune
   fullgraph: false
   dynamic: false

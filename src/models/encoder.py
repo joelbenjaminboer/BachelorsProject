@@ -15,6 +15,7 @@ class IMU_Intent_Encoder(nn.Module):
         positional_encoding_max_len,
         positional_encoding_base,
         dropout=0.1,
+        head_dropout=0.1,
         pooling="cls",
         patch_size=None,
         multitask=False,
@@ -56,7 +57,7 @@ class IMU_Intent_Encoder(nn.Module):
         self.regression_head = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
             nn.GELU(),
-            nn.Dropout(dropout),
+            nn.Dropout(head_dropout),
             nn.Linear(dim_feedforward, forecast_horizon),
         )
 
@@ -64,7 +65,7 @@ class IMU_Intent_Encoder(nn.Module):
             self.velocity_head = nn.Sequential(
                 nn.Linear(d_model, dim_feedforward),
                 nn.GELU(),
-                nn.Dropout(dropout),
+                nn.Dropout(head_dropout),
                 nn.Linear(dim_feedforward, forecast_horizon),
             )
 

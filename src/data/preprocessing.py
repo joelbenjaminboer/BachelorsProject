@@ -195,6 +195,7 @@ class IMUPreprocessor:
 
                 legs_to_process = ["right", "left"] if self.use_both_legs else ["right"]
                 Xw_trials, yw_trials, yw_vel_trials, aw_trials = [], [], [], []
+                n_skipped = 0
                 for f in trial_files:
                     try:
                         for leg in legs_to_process:
@@ -211,6 +212,16 @@ class IMUPreprocessor:
                                 aw_trials.append(aw)
                     except Exception as e:
                         logger.warning(f"Skipped {f}: {e}")
+                        n_skipped += 1
+                if n_skipped:
+                    logger.warning(
+                        "{}: skipped {}/{} trial files", subj_id, n_skipped, len(trial_files)
+                    )
+                if n_skipped == len(trial_files):
+                    logger.error(
+                        "{}: ALL trials skipped — check velocity column names or CSV format",
+                        subj_id,
+                    )
 
                 if Xw_trials:
                     subject_data[subj_id] = (Xw_trials, yw_trials, yw_vel_trials, aw_trials)
@@ -248,8 +259,12 @@ class IMUPreprocessor:
             fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
             os.makedirs(fold_dir, exist_ok=True)
 
+            hdf5_path = os.path.join(fold_dir, "data.h5")
+            if os.path.exists(hdf5_path):
+                os.remove(hdf5_path)
+
             save_fold_to_hdf5(
-                os.path.join(fold_dir, "data.h5"),
+                hdf5_path,
                 X_train,
                 y_train,
                 yv_train,

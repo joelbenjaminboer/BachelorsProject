@@ -1,8 +1,7 @@
 n_trials: 50
-epochs: 10        # epochs per trial; shorter than full training
+epochs: 15        # epochs per trial; shorter than full training
 direction: minimize
 
-# Concurrent trials within one process.
 # n_jobs > 1 with SQLite storage causes write contention — use null (in-memory) or a proper RDB.
 # n_jobs > 1 on MPS is not recommended (MPS thread-safety is limited).
 n_jobs: 4
@@ -12,50 +11,104 @@ n_jobs: 4
 storage: sqlite:///optuna.db
 
 pruner:
-  n_startup_trials: 5   # complete this many trials before pruning
+  n_startup_trials: 10  # complete this many trials before pruning
   n_warmup_steps: 5     # wait this many epochs before pruning within a trial
 
 # Each entry names the Optuna parameter, its type, and the config path it overrides (target).
 # type: categorical  → choices list
 # type: int          → low, high (inclusive)
 # type: float        → low, high; set log: true for log-uniform sampling
+#
+# Note: use the string "null" as a categorical choice to represent Python None
+# (e.g. patch_size: "null" disables patching). hparam_search.py converts it automatically.
 search_space:
+  # --- Architecture ---
   d_model:
     target: model.encoder.d_model
     type: categorical
-    choices: [64, 128, 256, 512]
+    choices: [64, 128, 256, 512, 1024]
   num_heads:
     target: model.encoder.num_heads
     type: categorical
-    choices: [1, 2, 4, 8]
+    choices: [2, 4, 8, 16]            # all divide every d_model above
   num_layers:
     target: model.encoder.num_layers
     type: int
     low: 2
-    high: 6
+    high: 10
   dim_feedforward:
     target: model.encoder.dim_feedforward
     type: categorical
-    choices: [256, 512, 1024, 2048]
+    choices: [256, 512, 1024, 2048, 4096]
+  pooling:
+    target: model.encoder.pooling
+    type: categorical
+    choices: [cls, mean]
+  patch_size:
+    target: model.encoder.patch_size
+    type: categorical
+    choices: ["null", 25]         # "null" → no patching; 25 → PatchTST-style
+
+  # --- Regularisation ---
   dropout:
     target: model.encoder.dropout
     type: float
     low: 0.0
-    high: 0.3
+    high: 0.4
+  head_dropout:
+    target: model.encoder.head_dropout
+    type: float
+    low: 0.0
+    high: 0.5
+
+  # --- Optimiser ---
   lr:
     target: model.optimizer.lr
     type: float
-    low: 1.0e-5
-    high: 1.0e-3
+    low: 5.0e-6
+    high: 5.0e-3
     log: true
   weight_decay:
     target: model.optimizer.weight_decay
     type: float
     low: 1.0e-6
-    high: 1.0e-3
+    high: 1.0e-2
     log: true
+
+  # --- Scheduler ---
+  warmup_epochs:
+    target: model.scheduler.warmup_epochs
+    type: int
+    low: 1
+    high: 5
+
+  # --- Loss ---
+  huber_delta:
+    target: model.loss.delta
+    type: float
+    low: 0.1
+    high: 10.0
+    log: true
+
+  # --- Training ---
+  batch_size:
+    target: training.batch_size
+    type: categorical
+    choices: [32, 64, 128, 256]
   freeze_encoder_epochs:
     target: training.freeze_encoder_epochs
     type: int
     low: 0
-    high: 3
+    high: 5
+
+  # --- Multitask ---
+  multitask_enabled:
+    target: model.multitask.enabled
+    type: categorical
+    choices: [true, false]
+  velocity_loss_weight:
+    target: model.multitask.velocity_loss_weight
+    type: float
+    low: 0.02
+    high: 0.5
+    log: true

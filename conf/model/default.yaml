@@ -8,6 +8,7 @@ encoder:
   num_layers: 6
   dim_feedforward: 1024
   dropout: 0.1
+  head_dropout: 0.1
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0

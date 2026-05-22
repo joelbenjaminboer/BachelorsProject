@@ -6,6 +6,7 @@
 version: "ablation_10_pretrain_multitask"
 
 run:
+  hparam_search: false
   pretrain: true
   train: true
   eval: true

@@ -4,6 +4,7 @@
 version: "ablation_01_baseline"
 
 run:
+  hparam_search: false
   pretrain: false
   train: true
   eval: true

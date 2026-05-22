@@ -85,6 +85,9 @@ def _suggest_overrides(trial: optuna.Trial, search_space: DictConfig, trial_epoc
             )
         else:
             raise ValueError(f"Unknown search_space type '{param_type}' for param '{name}'")
+        # "null" string in categorical choices maps to Python None (e.g. patch_size)
+        if value == "null":
+            value = None
         flat[target] = value
 
     flat["training.epochs"] = trial_epochs
