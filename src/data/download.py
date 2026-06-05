@@ -102,7 +102,7 @@ def run_download(cfg: DictConfig):
     downloader.run()
 
 
-@hydra.main(config_path="../conf", config_name="config", version_base=None)
+@hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     run_download(cfg)
 

@@ -176,8 +176,10 @@ class IMUPreprocessor:
         os.makedirs(output_dir, exist_ok=True)
         subject_sources = self._get_subject_sources()
         if not subject_sources:
-            logger.error(f"No zip files found in {self.root_dir}.")
-            return
+            raise FileNotFoundError(
+                f"No AB*.zip subject files found in {self.root_dir}. "
+                "Run download first or verify the extract_dir path."
+            )
 
         subject_data = {}
         for subj_id, subject_zip in tqdm(subject_sources, desc="Loading subjects"):
@@ -228,8 +230,10 @@ class IMUPreprocessor:
 
         valid_subject_ids = list(subject_data.keys())
         if not valid_subject_ids:
-            logger.error("No valid subjects loaded.")
-            return
+            raise RuntimeError(
+                "No valid subjects loaded. All subject ZIPs failed — "
+                "check the data format and column names."
+            )
 
         logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
         for i, test_subj in enumerate(valid_subject_ids):
@@ -307,7 +311,7 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
     preprocessor.run(processed_dir)
 
 
-@hydra.main(config_path="../conf", config_name="config", version_base=None)
+@hydra.main(config_path="../../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     run_preprocessing(cfg)
 
