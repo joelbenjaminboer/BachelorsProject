@@ -1,0 +1,17 @@
+# @package _global_
+# Last 25 patch tokens instead of CLS token.
+# Tests whether the CLS token is actually doing useful aggregation.
+
+version: "ablation_04_last25"
+
+run:
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 50
+
+model:
+  encoder:
+    pooling: last_25

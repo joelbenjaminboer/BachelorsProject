@@ -4,11 +4,11 @@ supports_pretrain: true
 encoder:
   input_features: 6
   d_model: 256
-  num_heads: 8
-  num_layers: 6
-  dim_feedforward: 1024
-  dropout: 0.1
-  head_dropout: 0.1
+  num_heads: 16
+  num_layers: 9
+  dim_feedforward: 2048
+  dropout: 0.11552696557838465
+  head_dropout: 0.4806130224114401
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0
@@ -17,19 +17,19 @@ encoder:
 
 optimizer:
   name: adamw
-  lr: 1.0e-4
-  weight_decay: 1.0e-5
+  lr: 0.00010299384799043909
+  weight_decay: 4.165464146172891e-05
   betas: [0.9, 0.999]
   eps: 1.0e-8
 
 loss:
   name: huber
   reduction: mean
-  delta: 1.0  # transition point from quadratic to linear (in normalised target units)
+  delta:  0.1020678984312352  # transition point from quadratic to linear (in normalised target units)
 
 scheduler:
   name: cosine_warmup
-  warmup_epochs: 5  # linear ramp from 1% → 100% of lr
+  warmup_epochs: 1  # linear ramp from 1% → 100% of lr
   min_lr: 1.0e-6
 
 multitask:
