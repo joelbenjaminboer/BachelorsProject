@@ -5,10 +5,10 @@ seed: 42
 
 autocast:
   enabled: true
-  dtype: bfloat16
+  dtype: auto
 
 compile:
-  enabled: true
+  enabled: false
   mode: max-autotune
   fullgraph: false
   dynamic: false

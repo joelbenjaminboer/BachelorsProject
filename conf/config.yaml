@@ -8,4 +8,4 @@ defaults:
   - hparam_search: default
   - _self_
 
-version: "Optuna.v1.0"
+version: "bestmodelv2"
