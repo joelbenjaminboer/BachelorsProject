@@ -32,13 +32,12 @@ class _TrialTrainer(Trainer):
 
         for epoch in range(self.epochs):
             if freeze_epochs > 0 and epoch == freeze_epochs:
-                self._begin_finetune_phase()
+                self._begin_finetune_phase(freeze_epochs)
 
             self._train_epoch(epoch)
             val_loss = self._validate_epoch(epoch)
 
-            if self.scheduler is not None:
-                self.scheduler.step(val_loss)
+            self._step_scheduler(val_loss)
 
             self._save_if_best(val_loss, epoch)
 
