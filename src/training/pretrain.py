@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 import torch
 from tqdm import tqdm
 
-from src.models.factory import build_loss, build_optimizer
+from src.models.factory import build_loss, build_masked_loss, build_optimizer
 from src.runtime import (
     RunContext,
     autocast_context,
@@ -105,7 +105,7 @@ def build_random_mask(
 def evaluate_masked_reconstruction(
     model,
     data_loader,
-    criterion,
+    masked_criterion,
     device,
     autocast_kwargs,
     non_blocking_transfer,
@@ -150,7 +150,7 @@ def evaluate_masked_reconstruction(
             with autocast_context(autocast_kwargs):
                 reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
                 target_imu = _patchify_target(past_imu, patch_size) if patch_size > 1 else past_imu
-                loss = criterion(reconstructed_imu[mask], target_imu[mask])
+                loss = masked_criterion(reconstructed_imu, target_imu, mask)
 
             batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                 reconstructed_imu, target_imu, mask, patch_size=patch_size, n_channels=n_channels
@@ -186,6 +186,9 @@ class Pretrainer:
         self.epochs = cfg.training.epochs
 
         self.criterion = build_loss(cfg)
+        # Sync-free masked loss: element-wise weighted by float mask
+        # avoids boolean fancy-indexing which forces CPU-GPU sync for shape inference
+        self.masked_criterion = build_masked_loss(cfg)
         self.optimizer = build_optimizer(cfg, self.model.parameters(), device=self.device)
 
         # Effective sequence length: reduced when using patch embedding
@@ -283,7 +286,7 @@ class Pretrainer:
                         if self.patch_size > 1
                         else past_imu
                     )
-                    loss = self.criterion(reconstructed_imu[mask], target_imu[mask])
+                    loss = self.masked_criterion(reconstructed_imu, target_imu, mask)
 
                 batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                     reconstructed_imu,
@@ -326,7 +329,7 @@ class Pretrainer:
             val_loss, val_channel_mse, val_channel_rmse = evaluate_masked_reconstruction(
                 model=self.model,
                 data_loader=self.ctx.val_loader,
-                criterion=self.criterion,
+                masked_criterion=self.masked_criterion,
                 device=self.device,
                 autocast_kwargs=self.autocast_kwargs,
                 non_blocking_transfer=self.ctx.non_blocking_transfer,

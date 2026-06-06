@@ -167,3 +167,46 @@ def build_loss(cfg: DictConfig):
         return nn.HuberLoss(reduction=reduction, delta=delta)
 
     raise ValueError(f"Unsupported loss '{loss_cfg.name}'")
+
+
+def build_masked_loss(cfg: DictConfig):
+    """Return a sync-free masked loss function for MAE pretraining.
+
+    Avoids boolean fancy-indexing (which forces a CPU-GPU sync to determine
+    the output shape via mask.sum()).  Instead applies the loss element-wise
+    and weights by the float mask, keeping everything on the CUDA stream.
+
+    Signature:
+        masked_loss(predictions, targets, mask) -> scalar tensor
+        predictions: [B, n_patches, features]
+        targets:     [B, n_patches, features]
+        mask:        [B, n_patches]  bool
+    """
+    import torch.nn.functional as F
+
+    loss_cfg = cfg.model.loss
+    loss_name = str(loss_cfg.name).lower()
+
+    if loss_name in {"mse", "smooth_l1"}:
+        def _masked_loss(pred, tgt, mask):
+            elem = F.mse_loss(pred, tgt, reduction="none")          # [B, P, F]
+            w = mask.to(dtype=elem.dtype).unsqueeze(-1)             # [B, P, 1]
+            return (elem * w).sum() / (w.sum() * pred.shape[-1])
+
+    elif loss_name == "l1":
+        def _masked_loss(pred, tgt, mask):
+            elem = F.l1_loss(pred, tgt, reduction="none")
+            w = mask.to(dtype=elem.dtype).unsqueeze(-1)
+            return (elem * w).sum() / (w.sum() * pred.shape[-1])
+
+    elif loss_name == "huber":
+        delta = float(loss_cfg.get("delta", 1.0))
+        def _masked_loss(pred, tgt, mask):
+            elem = F.huber_loss(pred, tgt, reduction="none", delta=delta)
+            w = mask.to(dtype=elem.dtype).unsqueeze(-1)
+            return (elem * w).sum() / (w.sum() * pred.shape[-1])
+
+    else:
+        raise ValueError(f"Unsupported loss for masked pretraining: '{loss_cfg.name}'")
+
+    return _masked_loss
