@@ -8,8 +8,8 @@ autocast:
   dtype: auto
 
 compile:
-  enabled: false
-  mode: max-autotune
+  enabled: true
+  mode: reduce-overhead
   fullgraph: false
   dynamic: false
   backend: null

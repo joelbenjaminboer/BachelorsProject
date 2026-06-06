@@ -20,7 +20,7 @@ from scipy.signal import decimate, find_peaks
 
 RAW_DIR = "data/raw/ENABL3S"
 ORIGINAL_FREQ = 500
-TARGET_FREQ = 100
+TARGET_FREQ = 50
 DOWNSAMPLE_FACTOR = ORIGINAL_FREQ // TARGET_FREQ
 
 # Minimum peak distance: 0.5 s (a stride is never shorter than this)

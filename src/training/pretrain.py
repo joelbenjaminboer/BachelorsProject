@@ -91,7 +91,7 @@ def evaluate_masked_reconstruction(
         return float("nan"), nan_metrics, nan_metrics
 
     model.eval()
-    phase_loss = 0.0
+    phase_loss = torch.zeros((), device=device)
     phase_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
     phase_masked_count = 0
 
@@ -124,9 +124,9 @@ def evaluate_masked_reconstruction(
                 phase_sq_error_sum += batch_sq_error_sum
                 phase_masked_count += batch_masked_count
 
-            phase_loss += loss.item()
+            phase_loss += loss.detach()
 
-    phase_loss /= len(data_loader)
+    phase_loss = (phase_loss / len(data_loader)).item()
 
     if phase_masked_count > 0:
         phase_channel_mse = (phase_sq_error_sum / phase_masked_count).detach().cpu()
@@ -224,7 +224,7 @@ class Pretrainer:
 
         for epoch in range(self.epochs):
             self.model.train()
-            train_loss = 0.0
+            train_loss = torch.zeros((), device=self.device)
             train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=self.device)
             train_masked_count = 0
             self.optimizer.zero_grad(set_to_none=True)
@@ -260,10 +260,13 @@ class Pretrainer:
                     total_batches=len(self.ctx.train_loader),
                 )
 
-                train_loss += loss.item()
+                train_loss += loss.detach()
 
-            if len(self.ctx.train_loader) > 0:
-                train_loss /= len(self.ctx.train_loader)
+            train_loss = (
+                (train_loss / len(self.ctx.train_loader)).item()
+                if len(self.ctx.train_loader) > 0
+                else 0.0
+            )
 
             if train_masked_count > 0:
                 train_channel_mse = (train_sq_error_sum / train_masked_count).detach().cpu()

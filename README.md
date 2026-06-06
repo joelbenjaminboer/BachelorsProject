@@ -133,3 +133,7 @@ Strict reproducibility mode:
 python main.py gpu.deterministic=true gpu.cuda.cudnn_benchmark=false
 ```
 
+
+## Applied learning
+
+- RTX 2080 SUPER (Turing): TF32/bf16 inert; use fp16 autocast + compile reduce-overhead.

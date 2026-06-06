@@ -171,9 +171,18 @@ def load_trials_from_hdf5(filepath: str):
         X_val, y_val, yv_val, act_val = load_group("val")
         X_test, y_test, yv_test, act_test = load_group("test")
         return (
-            X_train, y_train, yv_train, act_train,
-            X_val, y_val, yv_val, act_val,
-            X_test, y_test, yv_test, act_test,
+            X_train,
+            y_train,
+            yv_train,
+            act_train,
+            X_val,
+            y_val,
+            yv_val,
+            act_val,
+            X_test,
+            y_test,
+            yv_test,
+            act_test,
         )
 
 
@@ -239,9 +248,18 @@ def build_dataloaders(
         raise FileNotFoundError(f"data.h5 not found in {data_dir}. Run preprocessing first.")
 
     (
-        X_train, y_train, yv_train, act_train,
-        X_val, y_val, yv_val, act_val,
-        X_test, y_test, yv_test, act_test,
+        X_train,
+        y_train,
+        yv_train,
+        act_train,
+        X_val,
+        y_val,
+        yv_val,
+        act_val,
+        X_test,
+        y_test,
+        yv_test,
+        act_test,
     ) = load_trials_from_hdf5(str(data_file))
 
     logger.info("Computing IMU standard scaling from training subset")
@@ -336,7 +354,11 @@ def build_dataloaders(
     train_loader_generator = torch.Generator().manual_seed(seed)
 
     train_loader = DataLoader(
-        train_dataset, shuffle=True, generator=train_loader_generator, **common_loader_kwargs
+        train_dataset,
+        shuffle=True,
+        drop_last=True,
+        generator=train_loader_generator,
+        **common_loader_kwargs,
     )
     val_loader = DataLoader(val_dataset, shuffle=False, **common_loader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **common_loader_kwargs)

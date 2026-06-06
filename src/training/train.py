@@ -85,7 +85,7 @@ class Trainer:
 
     def _train_epoch(self, epoch: int) -> float:
         self.model.train()
-        total_loss = 0.0
+        total_loss = torch.zeros((), device=self.device)
         self.optimizer.zero_grad(set_to_none=True)
         loader = self.ctx.train_loader
 
@@ -123,13 +123,13 @@ class Trainer:
                 total_batches=len(loader),
             )
 
-            total_loss += loss.item()
+            total_loss += loss.detach()
 
-        return total_loss / len(loader) if len(loader) > 0 else 0.0
+        return (total_loss / len(loader)).item() if len(loader) > 0 else 0.0
 
     def _validate_epoch(self, epoch: int) -> float:
         self.model.eval()
-        total_loss = 0.0
+        total_loss = torch.zeros((), device=self.device)
         loader = self.ctx.val_loader
 
         with torch.inference_mode():
@@ -144,9 +144,9 @@ class Trainer:
                     output = self.model(past_imu, task="predict")
                     angle_pred = output[0] if isinstance(output, tuple) else output
                     loss = self.criterion(angle_pred, future_knee)
-                total_loss += loss.item()
+                total_loss += loss.detach()
 
-        return total_loss / len(loader) if len(loader) > 0 else 0.0
+        return (total_loss / len(loader)).item() if len(loader) > 0 else 0.0
 
     def _save_if_best(self, val_loss: float, epoch: int):
         if val_loss >= self.best_val_loss:
