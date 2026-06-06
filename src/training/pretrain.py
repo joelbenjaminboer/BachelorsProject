@@ -19,15 +19,43 @@ from src.training.plotting import save_pretrain_artifacts, should_save_intermedi
 CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
 
 
-def masked_channel_sse(predictions: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor):
-    masked_predictions = predictions[mask]
+def _patchify_target(x: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """[B, T, C] -> [B, T//P, P*C], matching encoder._patchify."""
+    B, T, C = x.shape
+    n = T // patch_size
+    return x[:, : n * patch_size, :].reshape(B, n, patch_size * C)
+
+
+def masked_channel_sse(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    mask: torch.Tensor,
+    patch_size: int = 1,
+    n_channels: int = len(CHANNEL_NAMES),
+):
+    """Compute per-channel sum-of-squared-errors over masked positions.
+
+    Works for both plain [B, T, C] tensors (patch_size=1) and patchified
+    [B, n_patches, P*C] tensors (patch_size>1).  Returns (sse_per_channel,
+    n_masked_timesteps) so callers can normalise to MSE.
+    """
+    masked_predictions = predictions[mask]  # [n_masked, P*C]
     masked_targets = targets[mask]
 
     if masked_predictions.numel() == 0:
         return None, 0
 
-    squared_error = (masked_predictions - masked_targets).pow(2)
-    return squared_error.sum(dim=0), masked_predictions.size(0)
+    squared_error = (masked_predictions - masked_targets).pow(2)  # [n_masked, P*C]
+    n_masked = masked_predictions.size(0)
+
+    if patch_size > 1:
+        # Reshape [n_masked, P*C] -> [n_masked*P, C] for per-channel SSE
+        squared_error = squared_error.reshape(n_masked * patch_size, n_channels)
+        count = n_masked * patch_size
+    else:
+        count = n_masked
+
+    return squared_error.sum(dim=0), count
 
 
 def format_channel_metrics(channel_names, values):
@@ -85,6 +113,8 @@ def evaluate_masked_reconstruction(
     epoch,
     epochs,
     phase_label,
+    patch_size: int = 1,
+    n_channels: int = len(CHANNEL_NAMES),
 ):
     if data_loader is None or len(data_loader) == 0:
         nan_metrics = torch.full((len(CHANNEL_NAMES),), float("nan"))
@@ -115,10 +145,11 @@ def evaluate_masked_reconstruction(
 
             with autocast_context(autocast_kwargs):
                 reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
-                loss = criterion(reconstructed_imu[mask], past_imu[mask])
+                target_imu = _patchify_target(past_imu, patch_size) if patch_size > 1 else past_imu
+                loss = criterion(reconstructed_imu[mask], target_imu[mask])
 
             batch_sq_error_sum, batch_masked_count = masked_channel_sse(
-                reconstructed_imu, past_imu, mask
+                reconstructed_imu, target_imu, mask, patch_size=patch_size, n_channels=n_channels
             )
             if batch_sq_error_sum is not None:
                 phase_sq_error_sum += batch_sq_error_sum
@@ -158,6 +189,8 @@ class Pretrainer:
         if hasattr(cfg.model, "encoder"):
             raw_patch = cfg.model.encoder.get("patch_size", None)
             patch_size = int(raw_patch) if raw_patch is not None else None
+        self.patch_size = patch_size or 1
+        self.n_channels = int(cfg.model.encoder.get("input_features", len(CHANNEL_NAMES)))
         self.seq_length = raw_seq // patch_size if patch_size else raw_seq
 
         # Mask configuration: percentage-based or absolute block lengths
@@ -240,10 +273,19 @@ class Pretrainer:
 
                 with autocast_context(self.autocast_kwargs):
                     reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
-                    loss = self.criterion(reconstructed_imu[mask], past_imu[mask])
+                    target_imu = (
+                        _patchify_target(past_imu, self.patch_size)
+                        if self.patch_size > 1
+                        else past_imu
+                    )
+                    loss = self.criterion(reconstructed_imu[mask], target_imu[mask])
 
                 batch_sq_error_sum, batch_masked_count = masked_channel_sse(
-                    reconstructed_imu, past_imu, mask
+                    reconstructed_imu,
+                    target_imu,
+                    mask,
+                    patch_size=self.patch_size,
+                    n_channels=self.n_channels,
                 )
                 if batch_sq_error_sum is not None:
                     train_sq_error_sum += batch_sq_error_sum
@@ -290,6 +332,8 @@ class Pretrainer:
                 epoch=epoch,
                 epochs=self.epochs,
                 phase_label="Val",
+                patch_size=self.patch_size,
+                n_channels=self.n_channels,
             )
 
             logger.info(
