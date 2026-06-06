@@ -186,12 +186,31 @@ def load_trials_from_hdf5(filepath: str):
         )
 
 
+def _welford_update(
+    n: int,
+    mean: torch.Tensor,
+    M2: torch.Tensor,
+    chunk: torch.Tensor,
+) -> tuple[int, torch.Tensor, torch.Tensor]:
+    """One step of Chan's parallel update (Welford variant) for running mean/variance."""
+    m = chunk.shape[0]
+    chunk_mean = chunk.mean(dim=0)
+    chunk_M2 = chunk.var(dim=0, unbiased=False) * m
+    delta = chunk_mean - mean
+    new_n = n + m
+    new_mean = mean + delta * (m / new_n)
+    new_M2 = M2 + chunk_M2 + delta**2 * (n * m / new_n)
+    return new_n, new_mean, new_M2
+
+
 def _compute_train_y_stats(y_train: list[torch.Tensor]):
     """Calculates Z-score statistics for the target over the training subset only."""
-    all_y = torch.cat(y_train, dim=0).float()  # [total_windows, horizon]
-    mean = all_y.mean()
-    std = all_y.std()
-    std = torch.clamp(std, min=1e-8)
+    n, mean, M2 = 0, torch.zeros(()), torch.zeros(())
+    for t in y_train:
+        flat = t.float().reshape(-1)
+        n, mean, M2 = _welford_update(n, mean, M2, flat.unsqueeze(-1))
+    mean = mean.squeeze()
+    std = torch.clamp(torch.sqrt(M2.squeeze() / max(n, 1)), min=1e-8)
     logger.debug(
         "y_train stats — mean: {:.2f}°, std: {:.2f}° (physiological range: mean 15–30°, std 20–35°)",
         mean.item(),
@@ -202,10 +221,12 @@ def _compute_train_y_stats(y_train: list[torch.Tensor]):
 
 def _compute_train_yvel_stats(yv_train: list[torch.Tensor]):
     """Calculates Z-score statistics for knee velocity over the training subset only."""
-    all_yv = torch.cat(yv_train, dim=0).float()
-    mean = all_yv.mean()
-    std = all_yv.std()
-    std = torch.clamp(std, min=1e-8)
+    n, mean, M2 = 0, torch.zeros(()), torch.zeros(())
+    for t in yv_train:
+        flat = t.float().reshape(-1)
+        n, mean, M2 = _welford_update(n, mean, M2, flat.unsqueeze(-1))
+    mean = mean.squeeze()
+    std = torch.clamp(torch.sqrt(M2.squeeze() / max(n, 1)), min=1e-8)
     logger.debug(
         "y_vel stats — mean: {:.4f} deg/s, std: {:.4f} deg/s",
         mean.item(),
@@ -216,14 +237,20 @@ def _compute_train_yvel_stats(yv_train: list[torch.Tensor]):
 
 def _compute_train_imu_stats(X_train: list[torch.Tensor]):
     """Calculates Z-score statistics over the training subset only."""
-    count = sum(x.numel() for x in X_train)
-    if count == 0:
+    if not X_train:
         return torch.zeros(6), torch.ones(6)
 
-    all_x = torch.cat(X_train, dim=0)  # [total_windows, seq_len, 6]
-    mean = all_x.mean(dim=(0, 1))
-    std = all_x.std(dim=(0, 1))
-    std = torch.clamp(std, min=1e-8)
+    n_features = X_train[0].shape[-1]
+    n, mean, M2 = 0, torch.zeros(n_features), torch.zeros(n_features)
+    for x in X_train:
+        # x: [windows, seq_len, features] → flatten to [windows*seq_len, features]
+        chunk = x.float().reshape(-1, n_features)
+        n, mean, M2 = _welford_update(n, mean, M2, chunk)
+
+    if n == 0:
+        return torch.zeros(n_features), torch.ones(n_features)
+
+    std = torch.clamp(torch.sqrt(M2 / n), min=1e-8)
     return mean.float(), std.float()
 
 
