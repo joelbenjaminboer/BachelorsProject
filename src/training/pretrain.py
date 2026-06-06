@@ -35,27 +35,31 @@ def masked_channel_sse(
 ):
     """Compute per-channel sum-of-squared-errors over masked positions.
 
-    Works for both plain [B, T, C] tensors (patch_size=1) and patchified
-    [B, n_patches, P*C] tensors (patch_size>1).  Returns (sse_per_channel,
-    n_masked_timesteps) so callers can normalise to MSE.
+    Uses element-wise multiplication instead of boolean fancy-indexing so no
+    CPU–GPU sync is forced per batch (boolean indexing + .size(0) would require
+    mask.sum() to be materialized as a Python int every step).
+
+    Returns (sse_per_channel [n_channels], count [scalar]) as CUDA tensors.
     """
-    masked_predictions = predictions[mask]  # [n_masked, P*C]
-    masked_targets = targets[mask]
+    # diff_sq: [B, n_patches, P*C]
+    diff_sq = (predictions - targets).pow(2)
 
-    if masked_predictions.numel() == 0:
-        return None, 0
-
-    squared_error = (masked_predictions - masked_targets).pow(2)  # [n_masked, P*C]
-    n_masked = masked_predictions.size(0)
+    # mask: [B, n_patches] bool → float weight [B, n_patches, 1]
+    mask_f = mask.to(dtype=diff_sq.dtype).unsqueeze(-1)
 
     if patch_size > 1:
-        # Reshape [n_masked, P*C] -> [n_masked*P, C] for per-channel SSE
-        squared_error = squared_error.reshape(n_masked * patch_size, n_channels)
-        count = n_masked * patch_size
+        B, n_patches, PC = predictions.shape
+        # Expand patches: [B, n_patches, P*C] -> [B, n_patches, P, C]
+        diff_sq = diff_sq.reshape(B, n_patches, patch_size, n_channels)
+        # weight each patch position: [B, n_patches, 1, 1]
+        mask_f = mask_f.unsqueeze(-1)
+        sse = (diff_sq * mask_f).sum(dim=(0, 1, 2))          # [n_channels]
+        count = mask_f.sum() * patch_size                     # scalar CUDA tensor
     else:
-        count = n_masked
+        sse = (diff_sq * mask_f).sum(dim=(0, 1))              # [n_channels]
+        count = mask_f.sum()                                  # scalar CUDA tensor
 
-    return squared_error.sum(dim=0), count
+    return sse, count
 
 
 def format_channel_metrics(channel_names, values):
@@ -123,7 +127,7 @@ def evaluate_masked_reconstruction(
     model.eval()
     phase_loss = torch.zeros((), device=device)
     phase_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
-    phase_masked_count = 0
+    phase_masked_count = torch.zeros((), device=device)
 
     with torch.inference_mode():
         for batch in tqdm(data_loader, desc=f"Epoch {epoch + 1}/{epochs} [{phase_label}]"):
@@ -151,16 +155,17 @@ def evaluate_masked_reconstruction(
             batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                 reconstructed_imu, target_imu, mask, patch_size=patch_size, n_channels=n_channels
             )
-            if batch_sq_error_sum is not None:
-                phase_sq_error_sum += batch_sq_error_sum
-                phase_masked_count += batch_masked_count
+            phase_sq_error_sum += batch_sq_error_sum
+            phase_masked_count += batch_masked_count
 
             phase_loss += loss.detach()
 
+    # Single sync per epoch to read accumulated scalars back to CPU
     phase_loss = (phase_loss / len(data_loader)).item()
+    phase_masked_count_val = phase_masked_count.item()
 
-    if phase_masked_count > 0:
-        phase_channel_mse = (phase_sq_error_sum / phase_masked_count).detach().cpu()
+    if phase_masked_count_val > 0:
+        phase_channel_mse = (phase_sq_error_sum / phase_masked_count_val).detach().cpu()
         phase_channel_rmse = torch.sqrt(phase_channel_mse)
     else:
         phase_channel_mse = torch.full((len(CHANNEL_NAMES),), float("nan"))
@@ -259,7 +264,7 @@ class Pretrainer:
             self.model.train()
             train_loss = torch.zeros((), device=self.device)
             train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=self.device)
-            train_masked_count = 0
+            train_masked_count = torch.zeros((), device=self.device)
             self.optimizer.zero_grad(set_to_none=True)
 
             for batch_idx, batch in enumerate(
@@ -287,9 +292,8 @@ class Pretrainer:
                     patch_size=self.patch_size,
                     n_channels=self.n_channels,
                 )
-                if batch_sq_error_sum is not None:
-                    train_sq_error_sum += batch_sq_error_sum
-                    train_masked_count += batch_masked_count
+                train_sq_error_sum += batch_sq_error_sum
+                train_masked_count += batch_masked_count
 
                 backward_and_step(
                     loss=loss,
@@ -310,8 +314,10 @@ class Pretrainer:
                 else 0.0
             )
 
-            if train_masked_count > 0:
-                train_channel_mse = (train_sq_error_sum / train_masked_count).detach().cpu()
+            # Single sync per epoch to read count back to CPU
+            train_masked_count_val = train_masked_count.item()
+            if train_masked_count_val > 0:
+                train_channel_mse = (train_sq_error_sum / train_masked_count_val).detach().cpu()
                 train_channel_rmse = torch.sqrt(train_channel_mse)
             else:
                 train_channel_mse = torch.full((len(CHANNEL_NAMES),), float("nan"))
