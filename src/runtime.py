@@ -185,19 +185,28 @@ def maybe_compile_model(model, cfg: DictConfig):
         logger.warning("torch.compile is unavailable in this PyTorch build; skipping compile")
         return model
 
+    backend = compile_cfg.get("backend", None)
+    use_custom_backend = (
+        backend is not None and str(backend).strip().lower() not in {"", "null", "none"}
+    )
+
     kwargs = {
-        "mode": str(compile_cfg.get("mode", "reduce-overhead")),
         "fullgraph": _to_bool(compile_cfg.get("fullgraph", False)),
         "dynamic": _to_bool(compile_cfg.get("dynamic", False)),
     }
-
-    backend = compile_cfg.get("backend", None)
-    if backend is not None and str(backend).strip().lower() not in {"", "null", "none"}:
+    # `mode` is an inductor-only argument; omit it when a custom backend is set
+    if not use_custom_backend:
+        kwargs["mode"] = str(compile_cfg.get("mode", "reduce-overhead"))
+    if use_custom_backend:
         kwargs["backend"] = str(backend)
 
     try:
         compiled_model = torch.compile(model, **kwargs)
-        logger.info("Enabled torch.compile with mode={}.", kwargs.get("mode"))
+        logger.info(
+            "Enabled torch.compile (backend={}, mode={}).",
+            kwargs.get("backend", "inductor"),
+            kwargs.get("mode", "n/a"),
+        )
         return compiled_model
     except Exception as exc:  # pragma: no cover - runtime capability guard
         logger.warning("torch.compile failed; falling back to eager mode. reason={}", exc)
