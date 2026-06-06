@@ -5,9 +5,9 @@ early_stopping:
   patience: 15        # stop after this many epochs without improvement
   min_delta: 1.0e-4   # minimum change to count as improvement
 batch_size: 256
-num_workers: 4
+num_workers: 2
 persistent_workers: true
-prefetch_factor: 4
+prefetch_factor: 2
 pin_memory: auto
 non_blocking_transfer: true
 split_ratio: 0.9  # 90/10 train/val split

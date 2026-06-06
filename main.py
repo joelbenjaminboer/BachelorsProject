@@ -16,12 +16,6 @@ from src.training.hparam_search import run_hparam_search
 from src.training.pretrain import run_pretrain
 from src.training.train import run_train
 import torch
-import torch.multiprocessing
-
-# Use file-system based shared memory so share_memory_() tensors don't consume
-# file descriptors (the default 'file_descriptor' strategy opens one fd per
-# tensor and hits the process RLIMIT_NOFILE limit on large datasets).
-torch.multiprocessing.set_sharing_strategy("file_system")
 
 MODEL_STAGES = ("pretrain", "train", "eval", "hparam_search")
 

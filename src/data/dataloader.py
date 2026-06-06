@@ -152,19 +152,17 @@ def load_trials_from_hdf5(filepath: str):
             for key in sorted(f[group].keys()):
                 if key.startswith("X_"):
                     idx = key.split("_")[1]
-                    X = torch.tensor(f[f"{group}/X_{idx}"][:]).share_memory_()
-                    y = torch.tensor(f[f"{group}/y_{idx}"][:]).share_memory_()
+                    X = torch.tensor(f[f"{group}/X_{idx}"][:])
+                    y = torch.tensor(f[f"{group}/y_{idx}"][:])
                     X_list.append(X)
                     y_list.append(y)
 
                     yv_key = f"{group}/yv_{idx}"
-                    yv_list.append(
-                        torch.tensor(f[yv_key][:]).share_memory_() if yv_key in f else None
-                    )
+                    yv_list.append(torch.tensor(f[yv_key][:]) if yv_key in f else None)
 
                     a_key = f"{group}/a_{idx}"
                     if a_key in f:
-                        a_list.append(torch.tensor(f[a_key][:]).share_memory_())
+                        a_list.append(torch.tensor(f[a_key][:]))
                     else:
                         a_list.append(None)
             return X_list, y_list, yv_list, a_list
