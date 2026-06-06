@@ -8,7 +8,7 @@ autocast:
   dtype: auto
 
 compile:
-  enabled: true
+  enabled: false
   mode: reduce-overhead
   fullgraph: false
   dynamic: false
