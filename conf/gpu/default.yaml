@@ -12,7 +12,7 @@ compile:
   mode: reduce-overhead
   fullgraph: false
   dynamic: false
-  backend: null
+  backend: cudagraphs
 
 parallel:
   strategy: auto
