@@ -152,13 +152,16 @@ def load_trials_from_hdf5(filepath: str):
             for key in sorted(f[group].keys()):
                 if key.startswith("X_"):
                     idx = key.split("_")[1]
-                    X = torch.tensor(f[f"{group}/X_{idx}"][:])
-                    y = torch.tensor(f[f"{group}/y_{idx}"][:])
+                    # Cast to float32 on load: the source arrays are float64
+                    # (pandas default), which doubles resident RAM. The model
+                    # trains in float32, so storing doubles wastes ~2x memory.
+                    X = torch.tensor(f[f"{group}/X_{idx}"][:]).float()
+                    y = torch.tensor(f[f"{group}/y_{idx}"][:]).float()
                     X_list.append(X)
                     y_list.append(y)
 
                     yv_key = f"{group}/yv_{idx}"
-                    yv_list.append(torch.tensor(f[yv_key][:]) if yv_key in f else None)
+                    yv_list.append(torch.tensor(f[yv_key][:]).float() if yv_key in f else None)
 
                     a_key = f"{group}/a_{idx}"
                     if a_key in f:
