@@ -5,10 +5,12 @@ from pathlib import Path
 import statistics
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from src.data.download import run_download
 from src.data.preprocessing import run_preprocessing
+from src.logging_utils import setup_logging
 from src.models.factory import build_and_prepare_model
 from src.runtime import build_run_context, load_state_into_model
 from src.training.eval import run_eval
@@ -20,8 +22,13 @@ import torch
 MODEL_STAGES = ("pretrain", "train", "eval", "hparam_search")
 
 
-def _run_single_fold(cfg, holdout: str, version: str):
+def _run_single_fold(cfg, holdout: str, version: str, log_dir: str | None = None):
     """Run the full pipeline for one LOSO holdout subject. Top-level so it's picklable."""
+    # In a worker subprocess Hydra's config isn't active, so loguru would only
+    # reach stderr. Give each fold its own file sink under the run directory.
+    if log_dir is not None and not HydraConfig.initialized():
+        setup_logging(cfg, output_dir=Path(log_dir) / f"fold_{holdout}")
+
     run_cfg = cfg.get("run", {})
     fold_cfg = OmegaConf.merge(
         cfg,
@@ -55,6 +62,10 @@ def _run_single_fold(cfg, holdout: str, version: str):
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
+    log_path = setup_logging(cfg)
+    if log_path is not None:
+        logger.info("Logging to {}", log_path)
+
     run_cfg = cfg.get("run", {})
     version = cfg.get("version", "0.1.0")
 
@@ -94,8 +105,12 @@ def main(cfg: DictConfig):
                 if result:
                     all_rmse[holdout] = result["overall"]["rmse"]
         else:
+            fold_log_dir = HydraConfig.get().runtime.output_dir
             with ProcessPoolExecutor(max_workers=max_workers) as pool:
-                futures = {pool.submit(_run_single_fold, cfg, h, version): h for h in holdouts}
+                futures = {
+                    pool.submit(_run_single_fold, cfg, h, version, fold_log_dir): h
+                    for h in holdouts
+                }
                 for fut in as_completed(futures):
                     holdout, result = fut.result()
                     if result:

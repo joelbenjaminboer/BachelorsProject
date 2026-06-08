@@ -1,0 +1,17 @@
+# File-only logging config. loguru owns the console (see src/logging_utils.py),
+# and loguru records are propagated into this stdlib FileHandler, so the run's
+# <job>.log is populated. Third-party libraries logging via `logging` also land
+# here. No console handler -> no duplicate terminal output.
+version: 1
+formatters:
+  simple:
+    format: "%(message)s"
+handlers:
+  file:
+    class: logging.FileHandler
+    formatter: simple
+    filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log
+root:
+  level: INFO
+  handlers: [file]
+disable_existing_loggers: false
