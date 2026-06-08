@@ -41,8 +41,11 @@ def masked_channel_sse(
 
     Returns (sse_per_channel [n_channels], count [scalar]) as CUDA tensors.
     """
+    # Detach: this is a metrics-only path. Without detach, the returned sse
+    # carries the autograd graph, and accumulating it across the epoch
+    # (train_sq_error_sum += ...) pins every batch's graph in GPU memory → OOM.
     # diff_sq: [B, n_patches, P*C]
-    diff_sq = (predictions - targets).pow(2)
+    diff_sq = (predictions.detach() - targets.detach()).pow(2)
 
     # mask: [B, n_patches] bool → float weight [B, n_patches, 1]
     mask_f = mask.to(dtype=diff_sq.dtype).unsqueeze(-1)
@@ -53,11 +56,11 @@ def masked_channel_sse(
         diff_sq = diff_sq.reshape(B, n_patches, patch_size, n_channels)
         # weight each patch position: [B, n_patches, 1, 1]
         mask_f = mask_f.unsqueeze(-1)
-        sse = (diff_sq * mask_f).sum(dim=(0, 1, 2))          # [n_channels]
-        count = mask_f.sum() * patch_size                     # scalar CUDA tensor
+        sse = (diff_sq * mask_f).sum(dim=(0, 1, 2))  # [n_channels]
+        count = mask_f.sum() * patch_size  # scalar CUDA tensor
     else:
-        sse = (diff_sq * mask_f).sum(dim=(0, 1))              # [n_channels]
-        count = mask_f.sum()                                  # scalar CUDA tensor
+        sse = (diff_sq * mask_f).sum(dim=(0, 1))  # [n_channels]
+        count = mask_f.sum()  # scalar CUDA tensor
 
     return sse, count
 
