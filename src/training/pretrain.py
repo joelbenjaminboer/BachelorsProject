@@ -152,8 +152,11 @@ def evaluate_masked_reconstruction(
 
             with autocast_context(autocast_kwargs):
                 reconstructed_imu = model(past_imu, mask=mask, task="reconstruct")
-                target_imu = _patchify_target(past_imu, patch_size) if patch_size > 1 else past_imu
-                loss = masked_criterion(reconstructed_imu, target_imu, mask)
+
+            # fp32 loss/target (see training loop note): avoids fp16 overflow.
+            target_imu = _patchify_target(past_imu, patch_size) if patch_size > 1 else past_imu
+            reconstructed_imu = reconstructed_imu.float()
+            loss = masked_criterion(reconstructed_imu, target_imu, mask)
 
             batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                 reconstructed_imu, target_imu, mask, patch_size=patch_size, n_channels=n_channels
@@ -184,7 +187,8 @@ class Pretrainer:
         self.model = model
         self.device = ctx.device
         self.autocast_kwargs = ctx.autocast_kwargs
-        self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
+        init_scale = cfg.gpu.autocast.get("init_scale", None)
+        self.scaler = build_grad_scaler(self.autocast_kwargs, self.device, init_scale=init_scale)
 
         self.epochs = cfg.training.epochs
 
@@ -284,12 +288,18 @@ class Pretrainer:
 
                 with autocast_context(self.autocast_kwargs):
                     reconstructed_imu = self.model(past_imu, mask=mask, task="reconstruct")
-                    target_imu = (
-                        _patchify_target(past_imu, self.patch_size)
-                        if self.patch_size > 1
-                        else past_imu
-                    )
-                    loss = self.masked_criterion(reconstructed_imu, target_imu, mask)
+
+                # Loss/target in fp32 outside autocast: the masked SSE sums many
+                # squared errors and can overflow fp16 (>65504) → NaN. The heavy
+                # transformer matmuls already ran in fp16 inside autocast, so the
+                # speedup is kept while the reduction stays numerically safe.
+                target_imu = (
+                    _patchify_target(past_imu, self.patch_size)
+                    if self.patch_size > 1
+                    else past_imu
+                )
+                reconstructed_imu = reconstructed_imu.float()
+                loss = self.masked_criterion(reconstructed_imu, target_imu, mask)
 
                 batch_sq_error_sum, batch_masked_count = masked_channel_sse(
                     reconstructed_imu,

@@ -139,4 +139,5 @@ python main.py gpu.deterministic=true gpu.cuda.cudnn_benchmark=false
 - RTX 2080 SUPER (Turing): TF32/bf16 inert; use fp16 autocast + compile reduce-overhead.
 - Load HDF5 trials as float32; pandas-default float64 doubles RAM and swap-thrashes low-mem hosts.
 - Detach tensors before accumulating epoch metrics; non-detached sums pin every batch's graph → CUDA OOM.
+- fp16 (Turing): cap GradScaler init_scale (1024) and compute loss in fp32 to avoid NaN.
 - Loguru bypasses Hydra's log file; propagate it into stdlib logging to populate outputs.

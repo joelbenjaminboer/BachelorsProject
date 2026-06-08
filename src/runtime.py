@@ -114,11 +114,20 @@ def autocast_context(autocast_kwargs):
     return torch.autocast(**autocast_kwargs)
 
 
-def build_grad_scaler(autocast_kwargs, device: torch.device):
-    use_scaler = autocast_kwargs is not None and device.type == "cuda"
+def build_grad_scaler(autocast_kwargs, device: torch.device, init_scale=None):
+    # A GradScaler is only meaningful for fp16 (bf16 has fp32's exponent range
+    # and needs no loss scaling). Skip it for bf16 to avoid pointless overhead.
+    use_scaler = (
+        autocast_kwargs is not None
+        and device.type == "cuda"
+        and autocast_kwargs.get("dtype") == torch.float16
+    )
     if not use_scaler:
         return None
-    return torch.cuda.amp.GradScaler(enabled=True)
+    kwargs = {"enabled": True}
+    if init_scale is not None:
+        kwargs["init_scale"] = float(init_scale)
+    return torch.amp.GradScaler("cuda", **kwargs)
 
 
 def resolve_gradient_settings(cfg: DictConfig):
@@ -186,9 +195,11 @@ def maybe_compile_model(model, cfg: DictConfig):
         return model
 
     backend = compile_cfg.get("backend", None)
-    use_custom_backend = (
-        backend is not None and str(backend).strip().lower() not in {"", "null", "none"}
-    )
+    use_custom_backend = backend is not None and str(backend).strip().lower() not in {
+        "",
+        "null",
+        "none",
+    }
 
     kwargs = {
         "fullgraph": _to_bool(compile_cfg.get("fullgraph", False)),

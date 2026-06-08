@@ -6,6 +6,10 @@ seed: 42
 autocast:
   enabled: true
   dtype: auto
+  # GradScaler starting scale. Default torch value is 65536 (2^16), which on
+  # fp16-only cards (Turing) can overshoot and produce inf/NaN in the first
+  # steps. 1024 (2^10) starts conservative and ramps up as headroom allows.
+  init_scale: 1024
 
 compile:
   enabled: false

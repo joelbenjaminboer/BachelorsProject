@@ -24,7 +24,8 @@ class Trainer:
         self.model = model
         self.device = ctx.device
         self.autocast_kwargs = ctx.autocast_kwargs
-        self.scaler = build_grad_scaler(self.autocast_kwargs, self.device)
+        init_scale = cfg.gpu.autocast.get("init_scale", None)
+        self.scaler = build_grad_scaler(self.autocast_kwargs, self.device, init_scale=init_scale)
 
         self.epochs = cfg.training.epochs
 
@@ -101,16 +102,18 @@ class Trainer:
 
             with autocast_context(self.autocast_kwargs):
                 output = self.model(past_imu, task="predict")
-                if isinstance(output, tuple):
-                    angle_pred, vel_pred = output
-                    angle_loss = self.criterion(angle_pred, future_knee)
-                    fkv = batch["future_knee_vel"].to(
-                        self.device, non_blocking=self.ctx.non_blocking_transfer
-                    )
-                    vel_loss = self.criterion(vel_pred, fkv)
-                    loss = angle_loss + self.vel_loss_weight * vel_loss
-                else:
-                    loss = self.criterion(output, future_knee)
+
+            # Loss in fp32 outside autocast to avoid fp16 overflow → NaN.
+            if isinstance(output, tuple):
+                angle_pred, vel_pred = output
+                angle_loss = self.criterion(angle_pred.float(), future_knee)
+                fkv = batch["future_knee_vel"].to(
+                    self.device, non_blocking=self.ctx.non_blocking_transfer
+                )
+                vel_loss = self.criterion(vel_pred.float(), fkv)
+                loss = angle_loss + self.vel_loss_weight * vel_loss
+            else:
+                loss = self.criterion(output.float(), future_knee)
 
             backward_and_step(
                 loss=loss,
@@ -142,8 +145,8 @@ class Trainer:
                 )
                 with autocast_context(self.autocast_kwargs):
                     output = self.model(past_imu, task="predict")
-                    angle_pred = output[0] if isinstance(output, tuple) else output
-                    loss = self.criterion(angle_pred, future_knee)
+                angle_pred = output[0] if isinstance(output, tuple) else output
+                loss = self.criterion(angle_pred.float(), future_knee)
                 total_loss += loss.detach()
 
         return (total_loss / len(loader)).item() if len(loader) > 0 else 0.0
