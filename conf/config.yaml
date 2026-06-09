@@ -9,4 +9,4 @@ defaults:
   - override hydra/job_logging: loguru
   - _self_
 
-version: "multitask_search"
+version: "allfolds_100hz"
