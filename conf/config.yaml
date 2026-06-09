@@ -9,4 +9,4 @@ defaults:
   - override hydra/job_logging: loguru
   - _self_
 
-version: "bestmodelv2"
+version: "multitask_search"

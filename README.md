@@ -140,4 +140,5 @@ python main.py gpu.deterministic=true gpu.cuda.cudnn_benchmark=false
 - Load HDF5 trials as float32; pandas-default float64 doubles RAM and swap-thrashes low-mem hosts.
 - Detach tensors before accumulating epoch metrics; non-detached sums pin every batch's graph → CUDA OOM.
 - fp16 (Turing): cap GradScaler init_scale (1024) and compute loss in fp32 to avoid NaN.
+- Run each LOSO fold in its own process (max_tasks_per_child=1); in-process folds leak ~15GB → OOM kill.
 - Loguru bypasses Hydra's log file; propagate it into stdlib logging to populate outputs.

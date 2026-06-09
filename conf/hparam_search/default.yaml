@@ -54,7 +54,7 @@ search_space:
     target: model.encoder.dropout
     type: float
     low: 0.0
-    high: 0.4
+    high: 0.6
   head_dropout:
     target: model.encoder.head_dropout
     type: float
@@ -105,7 +105,7 @@ search_space:
   multitask_enabled:
     target: model.multitask.enabled
     type: categorical
-    choices: [true, false]
+    choices: [true]
   velocity_loss_weight:
     target: model.multitask.velocity_loss_weight
     type: float

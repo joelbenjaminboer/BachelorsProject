@@ -99,22 +99,22 @@ def main(cfg: DictConfig):
             )
 
         all_rmse: dict[str, float] = {}
-        if max_workers <= 1:
-            for holdout in holdouts:
-                _, result = _run_single_fold(cfg, holdout, version)
+        fold_log_dir = HydraConfig.get().runtime.output_dir
+        # Run every fold in its own worker that is retired after a single task
+        # (max_tasks_per_child=1). When the worker exits, the fold's ~15 GB of
+        # data and its CUDA context are returned to the OS before the next fold
+        # forks. Running folds in-process accumulates memory across folds and
+        # gets OOM-killed ("Killed") after the first holdout. With max_workers=1
+        # this is sequential-but-isolated; >1 runs folds concurrently (VRAM/RAM
+        # contention — only safe with one worker per physical GPU and spare RAM).
+        with ProcessPoolExecutor(max_workers=max_workers, max_tasks_per_child=1) as pool:
+            futures = {
+                pool.submit(_run_single_fold, cfg, h, version, fold_log_dir): h for h in holdouts
+            }
+            for fut in as_completed(futures):
+                holdout, result = fut.result()
                 if result:
                     all_rmse[holdout] = result["overall"]["rmse"]
-        else:
-            fold_log_dir = HydraConfig.get().runtime.output_dir
-            with ProcessPoolExecutor(max_workers=max_workers) as pool:
-                futures = {
-                    pool.submit(_run_single_fold, cfg, h, version, fold_log_dir): h
-                    for h in holdouts
-                }
-                for fut in as_completed(futures):
-                    holdout, result = fut.result()
-                    if result:
-                        all_rmse[holdout] = result["overall"]["rmse"]
 
         if all_rmse:
             rmse_vals = list(all_rmse.values())
