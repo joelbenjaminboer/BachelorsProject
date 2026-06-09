@@ -1,13 +1,16 @@
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import glob
+import json
 import os
 from pathlib import Path
 import statistics
+import subprocess
+import sys
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from loguru import logger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from src.data.download import run_download
 from src.data.preprocessing import run_preprocessing
 from src.logging_utils import setup_logging
@@ -21,43 +24,108 @@ import torch
 
 MODEL_STAGES = ("pretrain", "train", "eval", "hparam_search")
 
+# Absolute path to this script, captured at import (before Hydra may change cwd)
+# so child fold subprocesses can re-invoke it from any working directory.
+_THIS_SCRIPT = os.path.abspath(__file__)
 
-def _run_single_fold(cfg, holdout: str, version: str, log_dir: str | None = None):
-    """Run the full pipeline for one LOSO holdout subject. Top-level so it's picklable."""
-    # In a worker subprocess Hydra's config isn't active, so loguru would only
-    # reach stderr. Give each fold its own file sink under the run directory.
-    if log_dir is not None and not HydraConfig.initialized():
-        setup_logging(cfg, output_dir=Path(log_dir) / f"fold_{holdout}")
 
-    run_cfg = cfg.get("run", {})
-    fold_cfg = OmegaConf.merge(
-        cfg,
-        OmegaConf.create({"training": {"holdout_subjects": [holdout]}}),
-    )
+def _write_fold_result(cfg: DictConfig, eval_results) -> None:
+    """When launched as a child fold (FOLD_RESULT_FILE set in env), persist the
+    eval RMSE so the parent all-folds orchestrator can aggregate LOSO mean/std."""
+    result_file = os.environ.get("FOLD_RESULT_FILE")
+    if not result_file or not eval_results:
+        return
+    holdouts = cfg.training.get("holdout_subjects", [])
+    holdout = holdouts[0] if holdouts else "unknown"
+    try:
+        rmse = float(eval_results["overall"]["rmse"])
+    except (KeyError, TypeError, ValueError):
+        return
+    Path(result_file).write_text(json.dumps({"holdout": holdout, "rmse": rmse}))
 
-    ctx = build_run_context(fold_cfg, version=version)
-    model = build_and_prepare_model(fold_cfg, ctx)
 
-    pretrain_supported = bool(fold_cfg.model.get("supports_pretrain", True))
-    will_pretrain = run_cfg.get("pretrain", False) and pretrain_supported
+def _run_all_folds(cfg: DictConfig) -> None:
+    """Run every LOSO fold as an independent `python main.py ...single fold...`
+    subprocess.
 
-    if will_pretrain:
-        run_pretrain(fold_cfg, model=model, ctx=ctx)
+    Each fold is the exact path used in a normal single-fold run, so it gets its
+    own Hydra init, a clean CUDA context, and full release of its ~15 GB of data
+    on process exit. Running folds in-process OOM-kills after the first holdout;
+    running them in a fork-based pool deadlocks on the first batch because
+    CUDA + DataLoader worker forking is unsupported. Subprocesses avoid both.
+    """
+    processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
+    fold_dirs = sorted(glob.glob(os.path.join(processed_dir, "fold_*")))
+    if not fold_dirs:
+        logger.error("No fold_* directories found in {}. Run preprocessing first.", processed_dir)
+        return
 
-    best_checkpoint_path = None
-    if run_cfg.get("train", False):
-        if not will_pretrain and run_cfg.get("load_checkpoint", False):
-            checkpoint_path = Path(run_cfg.get("checkpoint_path", ""))
-            if checkpoint_path.exists():
-                state = torch.load(checkpoint_path, map_location=ctx.device)
-                load_state_into_model(model, state, source=str(checkpoint_path))
-        best_checkpoint_path = run_train(fold_cfg, model=model, ctx=ctx)
+    holdouts = [os.path.basename(d).replace("fold_", "") for d in fold_dirs]
+    max_workers = int(cfg.get("run", {}).get("all_folds_workers", 1))
 
-    results = None
-    if run_cfg.get("eval", False):
-        results = run_eval(fold_cfg, model=model, ctx=ctx, checkpoint_path=best_checkpoint_path)
+    if max_workers > 1 and str(cfg.gpu.get("device", "auto")).lower() != "cpu":
+        logger.warning(
+            "all_folds_workers={} runs folds concurrently and causes GPU/RAM contention. "
+            "Use one worker per physical GPU.",
+            max_workers,
+        )
 
-    return holdout, results
+    original_cwd = hydra.utils.get_original_cwd()
+    results_dir = Path(HydraConfig.get().runtime.output_dir) / "fold_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Forward this invocation's overrides to each fold, minus the all-folds
+    # controls and any holdout selection (each fold sets its own holdout).
+    passthrough = [
+        o
+        for o in HydraConfig.get().overrides.task
+        if not o.startswith(("run.all_folds", "training.holdout_subjects"))
+    ]
+
+    def _run_fold(holdout: str):
+        result_file = results_dir / f"{holdout}.json"
+        cmd = [
+            sys.executable,
+            _THIS_SCRIPT,
+            *passthrough,
+            "run.all_folds=false",
+            f"training.holdout_subjects=[{holdout}]",
+        ]
+        env = {**os.environ, "FOLD_RESULT_FILE": str(result_file)}
+        logger.info("Launching fold {} ...", holdout)
+        proc = subprocess.run(cmd, cwd=original_cwd, env=env)
+        return holdout, proc.returncode, result_file
+
+    all_rmse: dict[str, float] = {}
+
+    def _collect(holdout: str, returncode: int, result_file: Path) -> None:
+        if returncode != 0:
+            logger.error("Fold {} exited with code {}", holdout, returncode)
+            return
+        if result_file.exists():
+            try:
+                all_rmse[holdout] = float(json.loads(result_file.read_text())["rmse"])
+            except Exception:
+                logger.exception("Could not read result for fold {}", holdout)
+
+    if max_workers <= 1:
+        for holdout in holdouts:
+            _collect(*_run_fold(holdout))
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for fut in as_completed([pool.submit(_run_fold, h) for h in holdouts]):
+                _collect(*fut.result())
+
+    if all_rmse:
+        rmse_vals = list(all_rmse.values())
+        per_fold = "  ".join(f"{h}={v:.4f}°" for h, v in sorted(all_rmse.items()))
+        logger.info("LOSO per-fold RMSE: {}", per_fold)
+        logger.info(
+            "LOSO RMSE over {} folds: mean={:.4f}°  std={:.4f}°",
+            len(rmse_vals),
+            statistics.mean(rmse_vals),
+            statistics.stdev(rmse_vals) if len(rmse_vals) > 1 else 0.0,
+        )
 
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -80,55 +148,10 @@ def main(cfg: DictConfig):
 
     # --- LOSO all-folds mode ---
     if run_cfg.get("all_folds", False):
-        processed_dir = hydra.utils.to_absolute_path(cfg.dataset.processed_dir)
-        fold_dirs = sorted(glob.glob(os.path.join(processed_dir, "fold_*")))
-        if not fold_dirs:
-            logger.error(
-                "No fold_* directories found in {}. Run preprocessing first.", processed_dir
-            )
-            return
-
-        holdouts = [os.path.basename(d).replace("fold_", "") for d in fold_dirs]
-        max_workers = int(run_cfg.get("all_folds_workers", 1))
-
-        if max_workers > 1 and str(cfg.gpu.get("device", "auto")).lower() not in {"cpu"}:
-            logger.warning(
-                "all_folds_workers={} with GPU training causes VRAM contention. "
-                "Use gpu.device=cpu or one worker per physical GPU.",
-                max_workers,
-            )
-
-        all_rmse: dict[str, float] = {}
-        fold_log_dir = HydraConfig.get().runtime.output_dir
-        # Run every fold in its own worker that is retired after a single task
-        # (max_tasks_per_child=1). When the worker exits, the fold's ~15 GB of
-        # data and its CUDA context are returned to the OS before the next fold
-        # forks. Running folds in-process accumulates memory across folds and
-        # gets OOM-killed ("Killed") after the first holdout. With max_workers=1
-        # this is sequential-but-isolated; >1 runs folds concurrently (VRAM/RAM
-        # contention — only safe with one worker per physical GPU and spare RAM).
-        with ProcessPoolExecutor(max_workers=max_workers, max_tasks_per_child=1) as pool:
-            futures = {
-                pool.submit(_run_single_fold, cfg, h, version, fold_log_dir): h for h in holdouts
-            }
-            for fut in as_completed(futures):
-                holdout, result = fut.result()
-                if result:
-                    all_rmse[holdout] = result["overall"]["rmse"]
-
-        if all_rmse:
-            rmse_vals = list(all_rmse.values())
-            per_fold = "  ".join(f"{h}={v:.4f}°" for h, v in sorted(all_rmse.items()))
-            logger.info("LOSO per-fold RMSE: {}", per_fold)
-            logger.info(
-                "LOSO RMSE over {} folds: mean={:.4f}°  std={:.4f}°",
-                len(rmse_vals),
-                statistics.mean(rmse_vals),
-                statistics.stdev(rmse_vals) if len(rmse_vals) > 1 else 0.0,
-            )
+        _run_all_folds(cfg)
         return
 
-    # --- Single-fold mode (default) ---
+    # --- Single-fold mode (default; also the per-fold child of all-folds) ---
     ctx = build_run_context(cfg, version=version)
 
     if run_cfg.get("hparam_search", False):
@@ -164,7 +187,8 @@ def main(cfg: DictConfig):
         best_checkpoint_path = run_train(cfg, model=model, ctx=ctx)
 
     if run_cfg.get("eval", False):
-        run_eval(cfg, model=model, ctx=ctx, checkpoint_path=best_checkpoint_path)
+        eval_results = run_eval(cfg, model=model, ctx=ctx, checkpoint_path=best_checkpoint_path)
+        _write_fold_result(cfg, eval_results)
 
 
 if __name__ == "__main__":
