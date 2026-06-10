@@ -12,6 +12,7 @@ from src.runtime import (
     autocast_context,
     load_state_into_model,
 )
+from src.training.baselines import evaluate_baselines
 from src.training.plotting import save_eval_artifacts
 
 
@@ -102,6 +103,9 @@ class Evaluator:
         return trials
 
     def run(self):
+        # Reference floor/ceiling: the model must beat the linear baseline.
+        baselines = evaluate_baselines(self.ctx)
+
         checkpoint_path = self.explicit_checkpoint_path or self._find_best_checkpoint()
         logger.info(f"Loading checkpoint: {checkpoint_path}")
         state = torch.load(checkpoint_path, map_location=self.device)
@@ -315,6 +319,7 @@ class Evaluator:
             "subject": subject_metrics,
             "activity": activity_metrics,
             "velocity": velocity_metrics,
+            "baselines": baselines,
             "checkpoint_path": str(checkpoint_path),
         }
 

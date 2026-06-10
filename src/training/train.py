@@ -41,7 +41,14 @@ class Trainer:
             cfg.model.get("multitask", {}).get("velocity_loss_weight", 0.1)
         )
 
-        self.best_val_loss = float("inf")
+        # Denormalisation scale for reporting/selecting on real-unit (degree) RMSE.
+        # Both prediction and target share the same affine z-score, so the mean
+        # cancels in the difference: rmse_deg = y_std * sqrt(mse_normalised).
+        self.y_std = self.ctx.split_info.get("y_std")
+
+        # Selection metric is real-unit validation RMSE (lower is better), not the
+        # normalised loss — the latter hides mean-collapse (see README applied learning).
+        self.best_val_metric = float("inf")
         self.best_epoch = None
         self.best_checkpoint_path = None
 
@@ -87,6 +94,7 @@ class Trainer:
     def _train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = torch.zeros((), device=self.device)
+        total_angle_loss = torch.zeros((), device=self.device)
         self.optimizer.zero_grad(set_to_none=True)
         loader = self.ctx.train_loader
 
@@ -113,7 +121,8 @@ class Trainer:
                 vel_loss = self.criterion(vel_pred.float(), fkv)
                 loss = angle_loss + self.vel_loss_weight * vel_loss
             else:
-                loss = self.criterion(output.float(), future_knee)
+                angle_loss = self.criterion(output.float(), future_knee)
+                loss = angle_loss
 
             backward_and_step(
                 loss=loss,
@@ -127,12 +136,19 @@ class Trainer:
             )
 
             total_loss += loss.detach()
+            total_angle_loss += angle_loss.detach()
 
-        return (total_loss / len(loader)).item() if len(loader) > 0 else 0.0
+        # Report angle-only loss so train/val curves are comparable (val omits
+        # the velocity term); optimisation still uses the full multitask loss.
+        return (total_angle_loss / len(loader)).item() if len(loader) > 0 else 0.0
 
-    def _validate_epoch(self, epoch: int) -> float:
+    def _validate_epoch(self, epoch: int) -> tuple[float, float]:
+        """Returns (angle-only val loss, real-unit val RMSE in degrees)."""
         self.model.eval()
+        scale = float(self.y_std) if self.y_std is not None else 1.0
         total_loss = torch.zeros((), device=self.device)
+        sq_err = torch.zeros((), device=self.device)
+        count = 0
         loader = self.ctx.val_loader
 
         with torch.inference_mode():
@@ -145,16 +161,21 @@ class Trainer:
                 )
                 with autocast_context(self.autocast_kwargs):
                     output = self.model(past_imu, task="predict")
-                angle_pred = output[0] if isinstance(output, tuple) else output
-                loss = self.criterion(angle_pred.float(), future_knee)
-                total_loss += loss.detach()
+                angle_pred = (output[0] if isinstance(output, tuple) else output).float()
+                total_loss += self.criterion(angle_pred, future_knee).detach()
+                diff = angle_pred - future_knee
+                sq_err += torch.sum(diff * diff)
+                count += diff.numel()
 
-        return (total_loss / len(loader)).item() if len(loader) > 0 else 0.0
+        n = max(1, len(loader))
+        val_loss = (total_loss / n).item()
+        val_rmse = scale * (sq_err / max(1, count)).sqrt().item()
+        return val_loss, val_rmse
 
-    def _save_if_best(self, val_loss: float, epoch: int):
-        if val_loss >= self.best_val_loss:
+    def _save_if_best(self, val_metric: float, epoch: int):
+        if val_metric >= self.best_val_metric:
             return
-        self.best_val_loss = val_loss
+        self.best_val_metric = val_metric
         self.best_epoch = epoch + 1
         checkpoint_path = os.path.join(
             hydra.utils.get_original_cwd(),
@@ -182,6 +203,7 @@ class Trainer:
 
         train_loss_history = []
         val_loss_history = []
+        val_rmse_history = []
         epochs_no_improve = 0
 
         for epoch in range(self.epochs):
@@ -190,21 +212,23 @@ class Trainer:
                 epochs_no_improve = 0  # reset counter when fine-tuning starts
 
             train_loss = self._train_epoch(epoch)
-            val_loss = self._validate_epoch(epoch)
+            val_loss, val_rmse = self._validate_epoch(epoch)
 
-            self._step_scheduler(val_loss)
+            # Select / schedule / early-stop on real-unit RMSE, not the loss.
+            self._step_scheduler(val_rmse)
 
             current_lr = self.optimizer.param_groups[0]["lr"]
             logger.info(
                 f"Epoch {epoch + 1}/{self.epochs} - Train Loss: {train_loss:.4f} - "
-                f"Val Loss: {val_loss:.4f} - LR: {current_lr:.2e}"
+                f"Val Loss: {val_loss:.4f} - Val RMSE: {val_rmse:.4f}° - LR: {current_lr:.2e}"
             )
 
             train_loss_history.append(float(train_loss))
             val_loss_history.append(float(val_loss))
+            val_rmse_history.append(float(val_rmse))
 
-            improved = val_loss < self.best_val_loss - self.early_stop_min_delta
-            self._save_if_best(val_loss, epoch)
+            improved = val_rmse < self.best_val_metric - self.early_stop_min_delta
+            self._save_if_best(val_rmse, epoch)
 
             if improved:
                 epochs_no_improve = 0
@@ -213,7 +237,7 @@ class Trainer:
                 if self.early_stop_patience > 0 and epochs_no_improve >= self.early_stop_patience:
                     logger.info(
                         f"Early stopping: no improvement for {self.early_stop_patience} epochs "
-                        f"(best val loss {self.best_val_loss:.4f} at epoch {self.best_epoch})"
+                        f"(best val RMSE {self.best_val_metric:.4f}° at epoch {self.best_epoch})"
                     )
                     break
 
@@ -225,6 +249,7 @@ class Trainer:
                     best_epoch=self.best_epoch,
                     best_checkpoint_path=self.best_checkpoint_path,
                     tag=f"epoch_{epoch + 1:03d}",
+                    val_rmse=val_rmse_history,
                 )
 
         save_train_artifacts(
@@ -234,6 +259,7 @@ class Trainer:
             best_epoch=self.best_epoch,
             best_checkpoint_path=self.best_checkpoint_path,
             tag="final",
+            val_rmse=val_rmse_history,
         )
 
         return self.best_checkpoint_path

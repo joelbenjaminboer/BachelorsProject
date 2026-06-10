@@ -67,7 +67,7 @@ Each stage is toggled via `conf/run/default.yaml`. All config is managed by Hydr
 
 ### Data flow
 
-1. **`src/data/preprocessing.py`** — Reads raw ENABL3S CSVs from ZIP archives, downsamples 500 Hz → 100 Hz, filters activity types, creates sliding windows (`context_length=125`, `forecast_horizon=50`), saves per-subject HDF5 files under `data/processed/ENABL3S/fold_<subject>/`.
+1. **`src/data/preprocessing.py`** — Reads raw ENABL3S CSVs from ZIP archives, downsamples 500 Hz → 100 Hz, filters activity types, creates sliding windows (`context_length=274`, `forecast_horizon=137`), saves per-subject HDF5 files under `data/processed/ENABL3S/fold_<subject>/`.
 
 2. **`src/data/dataloader.py`** — Loads HDF5, computes z-score normalization from the train split, returns `(train_loader, val_loader, test_loader)`. Uses **Leave-One-Subject-Out** (LOSO): one holdout subject is 100% test, the rest are 90/10 train/val.
 

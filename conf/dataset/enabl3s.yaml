@@ -7,3 +7,4 @@ original_freq: 500
 target_freq: 100
 use_both_legs: true
 anti_alias: true
+max_trials_per_subject: null   # cap CSV trials per subject; null = use all

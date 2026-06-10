@@ -123,6 +123,7 @@ def save_train_artifacts(
     best_epoch: int | None,
     best_checkpoint_path: str | None,
     tag: str,
+    val_rmse: Sequence[float] | None = None,
 ):
     if not stage_enabled(cfg, "train"):
         return
@@ -137,6 +138,7 @@ def save_train_artifacts(
         "best_checkpoint_path": best_checkpoint_path,
         "train_loss": list(train_losses),
         "val_loss": list(val_losses),
+        "val_rmse": list(val_rmse) if val_rmse is not None else None,
     }
     metrics_path = _save_metrics_json(cfg, stage_dir, f"metrics_{tag}.json", payload)
     if metrics_path is not None:
@@ -148,8 +150,8 @@ def save_train_artifacts(
 
     epochs = np.arange(1, len(train_losses) + 1)
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(epochs, train_losses, label="Train Loss", linewidth=2)
-    ax.plot(epochs, val_losses, label="Val Loss", linewidth=2)
+    ax.plot(epochs, train_losses, label="Train Loss (angle)", linewidth=2)
+    ax.plot(epochs, val_losses, label="Val Loss (angle)", linewidth=2)
 
     if best_epoch is not None and 1 <= best_epoch <= len(train_losses):
         ax.axvline(best_epoch, linestyle="--", linewidth=1.5, color="black", label="Best Epoch")
@@ -162,6 +164,23 @@ def save_train_artifacts(
 
     saved_paths = _save_figure(fig, stage_dir / f"loss_curve_{tag}", cfg)
     logger.info("Saved train plots: {}", ", ".join(str(path) for path in saved_paths))
+
+    # Real-unit (degree) validation RMSE — the actual selection metric.
+    if val_rmse:
+        rmse_epochs = np.arange(1, len(val_rmse) + 1)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(rmse_epochs, val_rmse, label="Val RMSE (°)", linewidth=2, color="C2")
+        if best_epoch is not None and 1 <= best_epoch <= len(val_rmse):
+            ax.axvline(
+                best_epoch, linestyle="--", linewidth=1.5, color="black", label="Best Epoch"
+            )
+        ax.set_title("Validation RMSE (real units)")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("RMSE (degrees)")
+        ax.legend()
+        ax.grid(alpha=0.3)
+        rmse_paths = _save_figure(fig, stage_dir / f"val_rmse_curve_{tag}", cfg)
+        logger.info("Saved val RMSE plot: {}", ", ".join(str(path) for path in rmse_paths))
 
 
 def _plot_channel_metric(

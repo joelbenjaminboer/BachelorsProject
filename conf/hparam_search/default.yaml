@@ -8,11 +8,14 @@ n_jobs: 1
 
 # null = in-memory only. SQLite example: "sqlite:///optuna.db"
 # Set storage + run the script N times in separate terminals for distributed parallel search.
-storage: sqlite:///optuna.db
+# NOTE: fresh DB file — the old optuna.db holds trials scored on the deprecated
+# Huber-δ0.1 loss; mixing those (~0.05) with the new real-unit RMSE objective
+# (~degrees) would poison study selection. Do not point back at optuna.db.
+storage: sqlite:///optuna_rmse.db
 
 pruner:
   n_startup_trials: 10  # complete this many trials before pruning
-  n_warmup_steps: 5     # wait this many epochs before pruning within a trial
+  n_warmup_steps: 7     # wait this many epochs before pruning (> max warmup_epochs=5)
 
 # Each entry names the Optuna parameter, its type, and the config path it overrides (target).
 # type: categorical  → choices list
@@ -50,11 +53,12 @@ search_space:
     choices: ["null", 25]         # "null" → no patching; 25 → PatchTST-style
 
   # --- Regularisation ---
+  # Capped well below the degenerate 0.33 that drove mean-collapse.
   dropout:
     target: model.encoder.dropout
     type: float
     low: 0.0
-    high: 0.6
+    high: 0.3
   head_dropout:
     target: model.encoder.head_dropout
     type: float
@@ -62,11 +66,12 @@ search_space:
     high: 0.3
 
   # --- Optimiser ---
+  # Upper bound lowered from 5e-3: ~4.5e-3 produced the non-learning run.
   lr:
     target: model.optimizer.lr
     type: float
     low: 5.0e-6
-    high: 5.0e-3
+    high: 1.0e-3
     log: true
   weight_decay:
     target: model.optimizer.weight_decay
@@ -82,13 +87,7 @@ search_space:
     low: 1
     high: 5
 
-  # --- Loss ---
-  huber_delta:
-    target: model.loss.delta
-    type: float
-    low: 0.1
-    high: 10.0
-    log: true
+  # Loss is fixed to MSE across all three models for a fair comparison; not searched.
 
   # --- Training ---
   batch_size:

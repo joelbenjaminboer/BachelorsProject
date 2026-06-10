@@ -7,8 +7,8 @@ encoder:
   num_heads: 16
   num_layers: 7
   dim_feedforward: 1024
-  dropout: 0.32551973887117647
-  head_dropout: 0.09502528223948842
+  dropout: 0.1
+  head_dropout: 0.1
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0
@@ -17,15 +17,14 @@ encoder:
 
 optimizer:
   name: adamw
-  lr: 0.004489987139101679
+  lr: 2.0e-4
   weight_decay: 0.001076103698025301
   betas: [0.9, 0.999]
   eps: 1.0e-8
 
 loss:
-  name: huber
+  name: mse        # standardised across encoder/tcn/timesnet for a fair comparison
   reduction: mean
-  delta:  0.10029422967780466  # transition point from quadratic to linear (in normalised target units)
 
 scheduler:
   name: cosine_warmup

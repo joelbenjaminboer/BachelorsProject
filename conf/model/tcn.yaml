@@ -16,8 +16,7 @@ optimizer:
   eps: 1.0e-8
 
 loss:
-  name: huber
-  delta: 1.0
+  name: mse        # standardised across encoder/tcn/timesnet for a fair comparison
   reduction: mean
 
 scheduler:

@@ -142,3 +142,4 @@ python main.py gpu.deterministic=true gpu.cuda.cudnn_benchmark=false
 - fp16 (Turing): cap GradScaler init_scale (1024) and compute loss in fp32 to avoid NaN.
 - Run each LOSO fold as a separate `python main.py` subprocess; in-process leaks RAM, fork+CUDA deadlocks.
 - Loguru bypasses Hydra's log file; propagate it into stdlib logging to populate outputs.
+- Tiny Huber delta on z-scored targets hides mean-collapse; select on real-unit RMSE, not loss.

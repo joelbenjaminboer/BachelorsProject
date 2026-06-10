@@ -20,9 +20,9 @@ class _TrialTrainer(Trainer):
         super().__init__(cfg, model, ctx)
         self._trial = trial
 
-    def _save_if_best(self, val_loss: float, epoch: int):
-        if val_loss < self.best_val_loss:
-            self.best_val_loss = val_loss
+    def _save_if_best(self, val_metric: float, epoch: int):
+        if val_metric < self.best_val_metric:
+            self.best_val_metric = val_metric
             self.best_epoch = epoch + 1
 
     def run(self) -> float:
@@ -35,26 +35,28 @@ class _TrialTrainer(Trainer):
                 self._begin_finetune_phase(freeze_epochs)
 
             self._train_epoch(epoch)
-            val_loss = self._validate_epoch(epoch)
+            # Optimise the search on real-unit val RMSE, not the normalised loss
+            # (which a mean-predictor minimises — see README applied learning).
+            _, val_rmse = self._validate_epoch(epoch)
 
-            self._step_scheduler(val_loss)
+            self._step_scheduler(val_rmse)
 
-            self._save_if_best(val_loss, epoch)
+            self._save_if_best(val_rmse, epoch)
 
             logger.info(
-                "Trial {} | Epoch {}/{} | val_loss={:.4f} | lr={:.2e}",
+                "Trial {} | Epoch {}/{} | val_rmse={:.4f}° | lr={:.2e}",
                 self._trial.number,
                 epoch + 1,
                 self.epochs,
-                val_loss,
+                val_rmse,
                 self.optimizer.param_groups[0]["lr"],
             )
 
-            self._trial.report(val_loss, epoch)
+            self._trial.report(val_rmse, epoch)
             if self._trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
 
-        return self.best_val_loss
+        return self.best_val_metric
 
 
 def _nested_from_dotpaths(flat: dict) -> dict:

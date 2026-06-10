@@ -192,6 +192,10 @@ class Pretrainer:
 
         self.epochs = cfg.training.epochs
 
+        es_cfg = cfg.training.get("early_stopping", {})
+        self.early_stop_patience = int(es_cfg.get("patience", 0))
+        self.early_stop_min_delta = float(es_cfg.get("min_delta", 0.0))
+
         self.criterion = build_loss(cfg)
         # Sync-free masked loss: element-wise weighted by float mask
         # avoids boolean fancy-indexing which forces CPU-GPU sync for shape inference
@@ -269,6 +273,7 @@ class Pretrainer:
         val_channel_mse_history = []
         train_channel_rmse_history = []
         val_channel_rmse_history = []
+        epochs_no_improve = 0
 
         for epoch in range(self.epochs):
             self.model.train()
@@ -386,6 +391,8 @@ class Pretrainer:
             train_channel_rmse_history.append(train_channel_rmse.tolist())
             val_channel_rmse_history.append(val_channel_rmse.tolist())
 
+            improved = val_loss < self.best_val_loss - self.early_stop_min_delta
+
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.best_epoch = epoch + 1
@@ -415,6 +422,18 @@ class Pretrainer:
                     best_checkpoint_path=self.best_checkpoint_path,
                     tag=f"epoch_{epoch + 1:03d}",
                 )
+
+            if improved:
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if self.early_stop_patience > 0 and epochs_no_improve >= self.early_stop_patience:
+                    logger.info(
+                        f"Early stopping pretraining: no improvement for "
+                        f"{self.early_stop_patience} epochs (best val loss "
+                        f"{self.best_val_loss:.4f} at epoch {self.best_epoch})"
+                    )
+                    break
 
         save_pretrain_artifacts(
             cfg=self.cfg,

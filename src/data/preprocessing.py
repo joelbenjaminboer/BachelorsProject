@@ -52,6 +52,8 @@ class IMUPreprocessor:
         target_freq=100,
         use_both_legs=False,
         anti_alias=True,
+        max_trials_per_subject=None,
+        val_split_seed=42,
     ):
         self.root_dir = root_dir
         self.window_size = window_size
@@ -59,6 +61,8 @@ class IMUPreprocessor:
         self.downsample_factor = original_freq // target_freq
         self.use_both_legs = use_both_legs
         self.anti_alias = anti_alias
+        self.max_trials_per_subject = max_trials_per_subject
+        self.val_split_seed = val_split_seed
         self.leg_configs = {
             "right": {
                 "predictors": [
@@ -193,7 +197,8 @@ class IMUPreprocessor:
                     ]
                 )
 
-                trial_files = trial_files[:40]
+                if self.max_trials_per_subject is not None:
+                    trial_files = trial_files[: self.max_trials_per_subject]
 
                 legs_to_process = ["right", "left"] if self.use_both_legs else ["right"]
                 Xw_trials, yw_trials, yw_vel_trials, aw_trials = [], [], [], []
@@ -248,6 +253,15 @@ class IMUPreprocessor:
                 yv_train_trials.extend(yv_trials)
                 act_train_trials.extend(a_trials)
 
+            # Shuffle trials (seeded) before the val slice so validation isn't
+            # just the first subject(s)' trials in load order.
+            rng = np.random.default_rng(self.val_split_seed)
+            perm = rng.permutation(len(X_train_trials))
+            X_train_trials = [X_train_trials[i] for i in perm]
+            y_train_trials = [y_train_trials[i] for i in perm]
+            yv_train_trials = [yv_train_trials[i] for i in perm]
+            act_train_trials = [act_train_trials[i] for i in perm]
+
             n_total = len(X_train_trials)
             n_val = max(1, int(0.1 * n_total))
 
@@ -296,6 +310,8 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
     target_freq = cfg.dataset.get("target_freq", 100)
     use_both_legs = cfg.dataset.get("use_both_legs", False)
     anti_alias = cfg.dataset.get("anti_alias", True)
+    max_trials_per_subject = cfg.dataset.get("max_trials_per_subject", None)
+    val_split_seed = int(cfg.training.get("split_seed", 42))
 
     logger.info("Preprocessing: anti_alias={}", anti_alias)
 
@@ -307,6 +323,8 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
         target_freq=target_freq,
         use_both_legs=use_both_legs,
         anti_alias=anti_alias,
+        max_trials_per_subject=max_trials_per_subject,
+        val_split_seed=val_split_seed,
     )
     preprocessor.run(processed_dir)
 
