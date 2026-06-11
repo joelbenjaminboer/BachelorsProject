@@ -9,7 +9,7 @@ from omegaconf import DictConfig
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataloader import build_dataloaders
+from src.data.dataloader import FoldData, build_dataloaders, build_loaders_from_fold
 
 
 def _gpu_cfg(cfg: DictConfig):
@@ -272,7 +272,9 @@ class RunContext:
     fold_dir: str
 
 
-def build_run_context(cfg: DictConfig, version: str) -> RunContext:
+def build_run_context(
+    cfg: DictConfig, version: str, fold_data: Optional[FoldData] = None
+) -> RunContext:
     device = resolve_device(cfg)
     configure_runtime(cfg, device)
     autocast_kwargs = resolve_autocast_kwargs(cfg, device)
@@ -294,14 +296,26 @@ def build_run_context(cfg: DictConfig, version: str) -> RunContext:
     aug_cfg = dict(cfg.training.get("augmentation", {})) or None
     multitask_enabled = bool(cfg.model.get("multitask", {}).get("enabled", False))
 
-    train_loader, val_loader, test_loader, split_info = build_dataloaders(
-        data_dir=fold_dir,
-        batch_size=cfg.training.batch_size,
-        seed=cfg.training.get("split_seed", 42),
-        aug_cfg=aug_cfg,
-        multitask=multitask_enabled,
-        **loader_kwargs,
-    )
+    if fold_data is not None:
+        # Reuse pre-loaded tensors (e.g. Optuna trials) — no HDF5 re-read, no
+        # second copy of the dataset in RAM; only the loaders are rebuilt.
+        train_loader, val_loader, test_loader, split_info = build_loaders_from_fold(
+            fold_data,
+            batch_size=cfg.training.batch_size,
+            seed=cfg.training.get("split_seed", 42),
+            aug_cfg=aug_cfg,
+            multitask=multitask_enabled,
+            **loader_kwargs,
+        )
+    else:
+        train_loader, val_loader, test_loader, split_info = build_dataloaders(
+            data_dir=fold_dir,
+            batch_size=cfg.training.batch_size,
+            seed=cfg.training.get("split_seed", 42),
+            aug_cfg=aug_cfg,
+            multitask=multitask_enabled,
+            **loader_kwargs,
+        )
 
     logger.info(f"Using device: {device}")
     logger.info(f"Run version: {version}")

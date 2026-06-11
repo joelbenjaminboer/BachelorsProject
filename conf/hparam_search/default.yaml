@@ -104,7 +104,7 @@ search_space:
   multitask_enabled:
     target: model.multitask.enabled
     type: categorical
-    choices: [true]
+    choices: [true, false]
   velocity_loss_weight:
     target: model.multitask.velocity_loss_weight
     type: float

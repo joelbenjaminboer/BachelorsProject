@@ -1,4 +1,5 @@
 import bisect
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import random
@@ -262,17 +263,41 @@ def _none_free(lst: list) -> list | None:
     return lst if all(a is not None for a in lst) else None
 
 
-def build_dataloaders(
-    data_dir: str,
-    batch_size: int,
-    seed: int = 42,
-    num_workers: Optional[int] = None,
-    persistent_workers: Optional[bool] = None,
-    pin_memory: Optional[bool] = None,
-    prefetch_factor: Optional[int] = None,
-    aug_cfg: Optional[dict] = None,
-    multitask: bool = False,
-):
+@dataclass
+class FoldData:
+    """Raw per-fold tensors + train-subset normalisation stats, loaded once from HDF5.
+
+    Decouples the expensive disk read / stats computation from the cheap
+    Dataset/DataLoader wrapping so callers (e.g. the Optuna search) can load a
+    fold once and rebuild loaders per trial without holding multiple copies of
+    the dataset in RAM. Velocity stats are computed whenever velocity targets are
+    present, so the same FoldData serves both multitask=True and =False trials.
+    """
+
+    X_train: list
+    y_train: list
+    yv_train: Optional[list]
+    act_train: Optional[list]
+    X_val: list
+    y_val: list
+    yv_val: Optional[list]
+    act_val: Optional[list]
+    X_test: list
+    y_test: list
+    yv_test: Optional[list]
+    act_test: Optional[list]
+    imu_mean: torch.Tensor
+    imu_std: torch.Tensor
+    y_mean: torch.Tensor
+    y_std: torch.Tensor
+    y_vel_mean: Optional[torch.Tensor]
+    y_vel_std: Optional[torch.Tensor]
+    subject_id: str
+    data_dir: str
+
+
+def load_fold_data(data_dir: str) -> FoldData:
+    """Read a fold's tensors from HDF5 and compute train-subset normalisation stats."""
     data_file = Path(data_dir) / "data.h5"
     if not data_file.exists():
         raise FileNotFoundError(f"data.h5 not found in {data_dir}. Run preprocessing first.")
@@ -296,15 +321,15 @@ def build_dataloaders(
     imu_mean, imu_std = _compute_train_imu_stats(X_train)
     y_mean, y_std = _compute_train_y_stats(y_train)
 
-    yv_train_clean = _none_free(yv_train) if multitask else None
-    yv_val_clean = _none_free(yv_val) if multitask else None
-    yv_test_clean = _none_free(yv_test) if multitask else None
+    yv_train_clean = _none_free(yv_train)
+    yv_val_clean = _none_free(yv_val)
+    yv_test_clean = _none_free(yv_test)
 
+    # Always compute velocity stats when present so one FoldData serves both
+    # multitask=True and =False trials (the loaders ignore them when not needed).
     y_vel_mean = y_vel_std = None
-    if multitask and yv_train_clean:
+    if yv_train_clean:
         y_vel_mean, y_vel_std = _compute_train_yvel_stats(yv_train_clean)
-
-    subject_id = Path(data_dir).name.replace("fold_", "")
 
     act_train_clean = _none_free(act_train)
     act_val_clean = _none_free(act_val)
@@ -316,45 +341,92 @@ def build_dataloaders(
         counts = Counter(int(v) for a in act_train_clean for v in a.tolist())
         logger.info("Train activity distribution: {}", dict(sorted(counts.items())))
 
+    return FoldData(
+        X_train=X_train,
+        y_train=y_train,
+        yv_train=yv_train_clean,
+        act_train=act_train_clean,
+        X_val=X_val,
+        y_val=y_val,
+        yv_val=yv_val_clean,
+        act_val=act_val_clean,
+        X_test=X_test,
+        y_test=y_test,
+        yv_test=yv_test_clean,
+        act_test=act_test_clean,
+        imu_mean=imu_mean,
+        imu_std=imu_std,
+        y_mean=y_mean,
+        y_std=y_std,
+        y_vel_mean=y_vel_mean,
+        y_vel_std=y_vel_std,
+        subject_id=Path(data_dir).name.replace("fold_", ""),
+        data_dir=str(data_dir),
+    )
+
+
+def build_loaders_from_fold(
+    fold: FoldData,
+    batch_size: int,
+    seed: int = 42,
+    num_workers: Optional[int] = None,
+    persistent_workers: Optional[bool] = None,
+    pin_memory: Optional[bool] = None,
+    prefetch_factor: Optional[int] = None,
+    aug_cfg: Optional[dict] = None,
+    multitask: bool = False,
+):
+    """Wrap a pre-loaded FoldData in Datasets + DataLoaders. Cheap; no disk read.
+
+    Only ``batch_size``, ``multitask`` and loader settings vary per call — the
+    underlying tensors are shared by reference, so calling this repeatedly (e.g.
+    once per Optuna trial) does not duplicate the dataset in memory.
+    """
+    yv_train = fold.yv_train if multitask else None
+    yv_val = fold.yv_val if multitask else None
+    yv_test = fold.yv_test if multitask else None
+    y_vel_mean = fold.y_vel_mean if multitask else None
+    y_vel_std = fold.y_vel_std if multitask else None
+
     train_dataset = HDF5KneeDataset(
-        X_train,
-        y_train,
-        imu_mean,
-        imu_std,
-        y_mean,
-        y_std,
-        activity=act_train_clean,
+        fold.X_train,
+        fold.y_train,
+        fold.imu_mean,
+        fold.imu_std,
+        fold.y_mean,
+        fold.y_std,
+        activity=fold.act_train,
         is_train=True,
         aug_cfg=aug_cfg,
         multitask=multitask,
-        y_vel=yv_train_clean,
+        y_vel=yv_train,
         y_vel_mean=y_vel_mean,
         y_vel_std=y_vel_std,
     )
     val_dataset = HDF5KneeDataset(
-        X_val,
-        y_val,
-        imu_mean,
-        imu_std,
-        y_mean,
-        y_std,
-        activity=act_val_clean,
+        fold.X_val,
+        fold.y_val,
+        fold.imu_mean,
+        fold.imu_std,
+        fold.y_mean,
+        fold.y_std,
+        activity=fold.act_val,
         multitask=multitask,
-        y_vel=yv_val_clean,
+        y_vel=yv_val,
         y_vel_mean=y_vel_mean,
         y_vel_std=y_vel_std,
     )
     test_dataset = HDF5KneeDataset(
-        X_test,
-        y_test,
-        imu_mean,
-        imu_std,
-        y_mean,
-        y_std,
-        activity=act_test_clean,
-        subject_id=subject_id,
+        fold.X_test,
+        fold.y_test,
+        fold.imu_mean,
+        fold.imu_std,
+        fold.y_mean,
+        fold.y_std,
+        activity=fold.act_test,
+        subject_id=fold.subject_id,
         multitask=multitask,
-        y_vel=yv_test_clean,
+        y_vel=yv_test,
         y_vel_mean=y_vel_mean,
         y_vel_std=y_vel_std,
     )
@@ -397,9 +469,9 @@ def build_dataloaders(
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
         "test_samples": len(test_dataset),
-        "fold_dir": str(data_dir),
-        "y_mean": y_mean.item(),
-        "y_std": y_std.item(),
+        "fold_dir": fold.data_dir,
+        "y_mean": fold.y_mean.item(),
+        "y_std": fold.y_std.item(),
     }
 
     if y_vel_mean is not None:
@@ -407,3 +479,29 @@ def build_dataloaders(
         split_info["y_vel_std"] = y_vel_std.item()
 
     return train_loader, val_loader, test_loader, split_info
+
+
+def build_dataloaders(
+    data_dir: str,
+    batch_size: int,
+    seed: int = 42,
+    num_workers: Optional[int] = None,
+    persistent_workers: Optional[bool] = None,
+    pin_memory: Optional[bool] = None,
+    prefetch_factor: Optional[int] = None,
+    aug_cfg: Optional[dict] = None,
+    multitask: bool = False,
+):
+    """Load a fold from disk and build its train/val/test DataLoaders."""
+    fold = load_fold_data(data_dir)
+    return build_loaders_from_fold(
+        fold,
+        batch_size=batch_size,
+        seed=seed,
+        num_workers=num_workers,
+        persistent_workers=persistent_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        aug_cfg=aug_cfg,
+        multitask=multitask,
+    )

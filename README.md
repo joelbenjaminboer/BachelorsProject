@@ -143,3 +143,4 @@ python main.py gpu.deterministic=true gpu.cuda.cudnn_benchmark=false
 - Run each LOSO fold as a separate `python main.py` subprocess; in-process leaks RAM, fork+CUDA deadlocks.
 - Loguru bypasses Hydra's log file; propagate it into stdlib logging to populate outputs.
 - Tiny Huber delta on z-scored targets hides mean-collapse; select on real-unit RMSE, not loss.
+- Optuna trials must reuse fold tensors loaded once; reloading per trial holds two copies → OOM.

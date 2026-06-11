@@ -8,6 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 import optuna
 import torch
 
+from src.data.dataloader import FoldData, load_fold_data
 from src.models.factory import build_and_prepare_model
 from src.runtime import RunContext
 from src.training.train import Trainer
@@ -96,15 +97,23 @@ def _suggest_overrides(trial: optuna.Trial, search_space: DictConfig, trial_epoc
     return _nested_from_dotpaths(flat)
 
 
-def _run_trial(trial: optuna.Trial, cfg: DictConfig, ctx: RunContext, trial_epochs: int) -> float:
+def _run_trial(
+    trial: optuna.Trial,
+    cfg: DictConfig,
+    ctx: RunContext,
+    trial_epochs: int,
+    fold_data: FoldData,
+) -> float:
     search_space = cfg.hparam_search.search_space
     overrides = _suggest_overrides(trial, search_space, trial_epochs)
     trial_cfg = OmegaConf.merge(cfg, OmegaConf.create(overrides))
 
-    # Rebuild run context so each trial gets its own safe Thread/Process dataloaders
+    # Rebuild run context so each trial gets fresh dataloaders with its own
+    # batch_size/multitask, but reuse the fold tensors loaded once up front —
+    # reloading per trial held a second full copy of the dataset and OOM'd.
     from src.runtime import build_run_context
 
-    trial_ctx = build_run_context(trial_cfg, ctx.version)
+    trial_ctx = build_run_context(trial_cfg, ctx.version, fold_data=fold_data)
 
     logger.info("Trial {} starting | params: {}", trial.number, trial.params)
 
@@ -187,8 +196,18 @@ def run_hparam_search(cfg: DictConfig, ctx: RunContext) -> optuna.Study:
         n_jobs,
     )
 
+    # The outer ctx's loaders are never used during the search — every trial
+    # builds its own. Drop them before loading the shared fold tensors so we
+    # don't briefly hold two full copies of the dataset (the original OOM).
+    fold_dir = ctx.fold_dir
+    ctx.train_loader = ctx.val_loader = ctx.test_loader = None
+    gc.collect()
+
+    # Load the fold once; all trials reuse these tensors by reference.
+    fold_data = load_fold_data(fold_dir)
+
     study.optimize(
-        lambda trial: _run_trial(trial, cfg, ctx, trial_epochs),
+        lambda trial: _run_trial(trial, cfg, ctx, trial_epochs, fold_data),
         n_trials=n_trials,
         n_jobs=n_jobs,
     )
