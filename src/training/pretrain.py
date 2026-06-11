@@ -1,6 +1,5 @@
 import os
 
-import hydra
 from loguru import logger
 from omegaconf import DictConfig
 import torch
@@ -12,6 +11,7 @@ from src.runtime import (
     autocast_context,
     backward_and_step,
     build_grad_scaler,
+    checkpoint_dir,
     unwrap_model,
 )
 from src.training.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
@@ -396,12 +396,7 @@ class Pretrainer:
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.best_epoch = epoch + 1
-                save_dir = os.path.join(
-                    hydra.utils.get_original_cwd(),
-                    "checkpoints",
-                    "pretrain",
-                    self.ctx.version,
-                )
+                save_dir = checkpoint_dir(self.cfg, self.ctx.version, pretrain=True)
                 os.makedirs(save_dir, exist_ok=True)
                 checkpoint_path = os.path.join(save_dir, f"best_pretrained_epoch_{epoch + 1}.pth")
                 torch.save(unwrap_model(self.model).state_dict(), checkpoint_path)

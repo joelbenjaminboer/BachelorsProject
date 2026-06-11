@@ -16,6 +16,28 @@ def _gpu_cfg(cfg: DictConfig):
     return cfg.get("gpu", {})
 
 
+def fold_subdir(cfg: DictConfig) -> str:
+    """Per-fold checkpoint subfolder name, keyed by the LOSO holdout subject(s).
+
+    Returns e.g. ``"fold_AB156"`` so concurrent/sequential LOSO folds each save to
+    their own directory instead of overwriting a single shared ``best_model_*``.
+    Returns ``""`` when no holdout is set (harmless as an ``os.path.join`` segment).
+    """
+    holdouts = list(cfg.get("training", {}).get("holdout_subjects", []) or [])
+    if not holdouts:
+        return ""
+    return "fold_" + "_".join(str(h) for h in holdouts)
+
+
+def checkpoint_dir(cfg: DictConfig, version: str, *, pretrain: bool = False) -> str:
+    """Absolute per-fold checkpoint directory: ``checkpoints[/pretrain]/<version>/fold_<holdout>``."""
+    parts = [hydra.utils.get_original_cwd(), "checkpoints"]
+    if pretrain:
+        parts.append("pretrain")
+    parts.extend([version, fold_subdir(cfg)])
+    return os.path.join(*parts)
+
+
 def _to_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value

@@ -1,6 +1,5 @@
 import os
 
-import hydra
 from loguru import logger
 from omegaconf import DictConfig
 import torch
@@ -12,6 +11,7 @@ from src.runtime import (
     autocast_context,
     backward_and_step,
     build_grad_scaler,
+    checkpoint_dir,
     unwrap_model,
 )
 from src.training.plotting import save_train_artifacts, should_save_intermediate_epoch
@@ -178,9 +178,7 @@ class Trainer:
         self.best_val_metric = val_metric
         self.best_epoch = epoch + 1
         checkpoint_path = os.path.join(
-            hydra.utils.get_original_cwd(),
-            "checkpoints",
-            self.ctx.version,
+            checkpoint_dir(self.cfg, self.ctx.version),
             f"best_model_epoch_{epoch + 1}.pth",
         )
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)

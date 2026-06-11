@@ -10,6 +10,7 @@ from tqdm import tqdm
 from src.runtime import (
     RunContext,
     autocast_context,
+    fold_subdir,
     load_state_into_model,
 )
 from src.training.baselines import evaluate_baselines
@@ -33,9 +34,16 @@ class Evaluator:
     def _find_best_checkpoint(self) -> Path:
         base_checkpoints_dir = Path(hydra.utils.get_original_cwd()) / "checkpoints"
 
+        # Prefer this fold's own directory so LOSO folds don't pick up another
+        # fold's checkpoint; fall back to the shared/legacy locations.
+        version_dir = base_checkpoints_dir / self.ctx.version
         candidates = []
         seen = set()
-        for checkpoints_dir in [base_checkpoints_dir / self.ctx.version, base_checkpoints_dir]:
+        for checkpoints_dir in [
+            version_dir / fold_subdir(self.cfg),
+            version_dir,
+            base_checkpoints_dir,
+        ]:
             if checkpoints_dir in seen:
                 continue
             seen.add(checkpoints_dir)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import sys
+import traceback
 
 from hydra.core.hydra_config import HydraConfig
 from loguru import logger
@@ -42,6 +43,25 @@ class _PropagateHandler(logging.Handler):
         logging.getLogger(record.name).handle(record)
 
 
+def _install_excepthook() -> None:
+    """Route uncaught exceptions into loguru so they also land in the log file.
+
+    Loguru sinks only receive ``logger.*`` calls, so without this an uncaught
+    crash (e.g. eval dying inside the baseline step) prints only to the terminal
+    and the run's ``*.log`` just ends mid-run with no error. The full traceback
+    is formatted into the message so it is recorded regardless of sink type.
+    """
+
+    def _hook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logger.critical("Uncaught exception — terminating:\n{}", tb.rstrip())
+
+    sys.excepthook = _hook
+
+
 def setup_logging(cfg=None, *, output_dir: str | Path | None = None) -> Path | None:
     """Route loguru to a colored console and into Hydra's run-directory log file.
 
@@ -54,6 +74,7 @@ def setup_logging(cfg=None, *, output_dir: str | Path | None = None) -> Path | N
 
     logger.remove()
     logger.add(sys.stderr, level=level, format=_CONSOLE_FORMAT, enqueue=True)
+    _install_excepthook()
 
     hydra_active = output_dir is None and HydraConfig.initialized()
 
