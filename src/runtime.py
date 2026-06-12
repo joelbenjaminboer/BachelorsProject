@@ -317,6 +317,7 @@ def build_run_context(
 
     aug_cfg = dict(cfg.training.get("augmentation", {})) or None
     multitask_enabled = bool(cfg.model.get("multitask", {}).get("enabled", False))
+    normalization = cfg.dataset.get("normalization", "zscore")
 
     if fold_data is not None:
         # Reuse pre-loaded tensors (e.g. Optuna trials) — no HDF5 re-read, no
@@ -336,6 +337,7 @@ def build_run_context(
             seed=cfg.training.get("split_seed", 42),
             aug_cfg=aug_cfg,
             multitask=multitask_enabled,
+            normalization=normalization,
             **loader_kwargs,
         )
 

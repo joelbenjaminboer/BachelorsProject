@@ -34,6 +34,9 @@ class HDF5KneeDataset(Dataset):
         y_vel: list[torch.Tensor] | None = None,
         y_vel_mean=None,
         y_vel_std=None,
+        norm_type: str = "zscore",
+        imu_min=None,
+        imu_max=None,
     ):
         self.X = X
         self.y = y
@@ -49,6 +52,9 @@ class HDF5KneeDataset(Dataset):
         self.y_vel = y_vel
         self.y_vel_mean = y_vel_mean
         self.y_vel_std = y_vel_std
+        self.norm_type = norm_type
+        self.imu_min = imu_min
+        self.imu_max = imu_max
 
         self.total_samples = 0
         self.cumulative_sizes = []
@@ -58,6 +64,15 @@ class HDF5KneeDataset(Dataset):
 
     def __len__(self):
         return self.total_samples
+
+    def normalize_X(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the configured IMU normalisation to a raw tensor (for external callers)."""
+        if self.norm_type == "minmax" and self.imu_min is not None and self.imu_max is not None:
+            denom = torch.clamp(self.imu_max - self.imu_min, min=1e-8)
+            return 2.0 * (x - self.imu_min) / denom - 1.0
+        if self.imu_mean is not None and self.imu_std is not None:
+            return (x - self.imu_mean) / self.imu_std
+        return x
 
     def _augment(self, x: torch.Tensor) -> torch.Tensor:
         cfg = self.aug_cfg
@@ -120,8 +135,7 @@ class HDF5KneeDataset(Dataset):
         if self.multitask and self.y_vel is not None:
             future_knee_vel = self.y_vel[trial_idx][local_idx].float()
 
-        if self.imu_mean is not None and self.imu_std is not None:
-            past_imu = (past_imu - self.imu_mean) / self.imu_std
+        past_imu = self.normalize_X(past_imu)
 
         if self.is_train and self.aug_cfg.get("enabled", False):
             past_imu = self._augment(past_imu)
@@ -258,6 +272,22 @@ def _compute_train_imu_stats(X_train: list[torch.Tensor]):
     return mean.float(), std.float()
 
 
+def _compute_train_imu_minmax(X_train: list[torch.Tensor]):
+    """Calculates per-feature min/max over the training subset for min-max normalisation."""
+    if not X_train:
+        return torch.zeros(6), torch.ones(6)
+
+    n_features = X_train[0].shape[-1]
+    global_min = torch.full((n_features,), float("inf"))
+    global_max = torch.full((n_features,), float("-inf"))
+    for x in X_train:
+        chunk = x.float().reshape(-1, n_features)
+        global_min = torch.minimum(global_min, chunk.min(dim=0).values)
+        global_max = torch.maximum(global_max, chunk.max(dim=0).values)
+
+    return global_min.float(), global_max.float()
+
+
 def _none_free(lst: list) -> list | None:
     """Return list if all elements are not None, else None."""
     return lst if all(a is not None for a in lst) else None
@@ -288,6 +318,9 @@ class FoldData:
     act_test: Optional[list]
     imu_mean: torch.Tensor
     imu_std: torch.Tensor
+    imu_min: Optional[torch.Tensor]
+    imu_max: Optional[torch.Tensor]
+    norm_type: str
     y_mean: torch.Tensor
     y_std: torch.Tensor
     y_vel_mean: Optional[torch.Tensor]
@@ -296,7 +329,7 @@ class FoldData:
     data_dir: str
 
 
-def load_fold_data(data_dir: str) -> FoldData:
+def load_fold_data(data_dir: str, normalization: str = "zscore") -> FoldData:
     """Read a fold's tensors from HDF5 and compute train-subset normalisation stats."""
     data_file = Path(data_dir) / "data.h5"
     if not data_file.exists():
@@ -317,8 +350,13 @@ def load_fold_data(data_dir: str) -> FoldData:
         act_test,
     ) = load_trials_from_hdf5(str(data_file))
 
-    logger.info("Computing IMU standard scaling from training subset")
+    norm_type = "minmax" if normalization == "height_minmax" else "zscore"
+    logger.info("Computing IMU normalisation stats from training subset (mode={})", normalization)
     imu_mean, imu_std = _compute_train_imu_stats(X_train)
+    imu_min = imu_max = None
+    if norm_type == "minmax":
+        imu_min, imu_max = _compute_train_imu_minmax(X_train)
+        logger.debug("IMU min-max range per feature: min={}, max={}", imu_min.tolist(), imu_max.tolist())
     y_mean, y_std = _compute_train_y_stats(y_train)
 
     yv_train_clean = _none_free(yv_train)
@@ -356,6 +394,9 @@ def load_fold_data(data_dir: str) -> FoldData:
         act_test=act_test_clean,
         imu_mean=imu_mean,
         imu_std=imu_std,
+        imu_min=imu_min,
+        imu_max=imu_max,
+        norm_type=norm_type,
         y_mean=y_mean,
         y_std=y_std,
         y_vel_mean=y_vel_mean,
@@ -388,6 +429,8 @@ def build_loaders_from_fold(
     y_vel_mean = fold.y_vel_mean if multitask else None
     y_vel_std = fold.y_vel_std if multitask else None
 
+    _norm_kwargs = dict(norm_type=fold.norm_type, imu_min=fold.imu_min, imu_max=fold.imu_max)
+
     train_dataset = HDF5KneeDataset(
         fold.X_train,
         fold.y_train,
@@ -402,6 +445,7 @@ def build_loaders_from_fold(
         y_vel=yv_train,
         y_vel_mean=y_vel_mean,
         y_vel_std=y_vel_std,
+        **_norm_kwargs,
     )
     val_dataset = HDF5KneeDataset(
         fold.X_val,
@@ -415,6 +459,7 @@ def build_loaders_from_fold(
         y_vel=yv_val,
         y_vel_mean=y_vel_mean,
         y_vel_std=y_vel_std,
+        **_norm_kwargs,
     )
     test_dataset = HDF5KneeDataset(
         fold.X_test,
@@ -429,6 +474,7 @@ def build_loaders_from_fold(
         y_vel=yv_test,
         y_vel_mean=y_vel_mean,
         y_vel_std=y_vel_std,
+        **_norm_kwargs,
     )
 
     if num_workers is None:
@@ -491,9 +537,10 @@ def build_dataloaders(
     prefetch_factor: Optional[int] = None,
     aug_cfg: Optional[dict] = None,
     multitask: bool = False,
+    normalization: str = "zscore",
 ):
     """Load a fold from disk and build its train/val/test DataLoaders."""
-    fold = load_fold_data(data_dir)
+    fold = load_fold_data(data_dir, normalization=normalization)
     return build_loaders_from_fold(
         fold,
         batch_size=batch_size,

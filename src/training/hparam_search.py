@@ -204,7 +204,8 @@ def run_hparam_search(cfg: DictConfig, ctx: RunContext) -> optuna.Study:
     gc.collect()
 
     # Load the fold once; all trials reuse these tensors by reference.
-    fold_data = load_fold_data(fold_dir)
+    normalization = cfg.dataset.get("normalization", "zscore")
+    fold_data = load_fold_data(fold_dir, normalization=normalization)
 
     study.optimize(
         lambda trial: _run_trial(trial, cfg, ctx, trial_epochs, fold_data),

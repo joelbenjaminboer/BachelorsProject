@@ -77,10 +77,7 @@ class Evaluator:
             X_trial = test_dataset.X[trial_idx].float()
             y_trial = test_dataset.y[trial_idx].float()
 
-            if test_dataset.imu_mean is not None:
-                X_norm = (X_trial - test_dataset.imu_mean) / test_dataset.imu_std
-            else:
-                X_norm = X_trial
+            X_norm = test_dataset.normalize_X(X_trial)
 
             preds_parts = []
             targets_parts = []

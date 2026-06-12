@@ -8,3 +8,10 @@ target_freq: 100
 use_both_legs: true
 anti_alias: true
 max_trials_per_subject: null   # cap CSV trials per subject; null = use all
+
+# Normalization strategy: "zscore" (global z-score) or "height_minmax"
+# (per-subject height scaling then per-feature min-max to [-1, 1]).
+# Switching between modes requires re-running preprocessing (run.preprocess=true).
+normalization: zscore
+# Reference height (cm) for height normalization. null = mean of all dataset subjects.
+height_ref_cm: null

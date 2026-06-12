@@ -11,6 +11,24 @@ from omegaconf import DictConfig
 import pandas as pd
 from tqdm import tqdm
 
+# Heights (cm) from "Subject Trigger Channel Feature Information.xlsx".
+ENABL3S_SUBJECT_HEIGHTS_CM: dict[str, float] = {
+    "AB156": 193,
+    "AB185": 181,
+    "AB186": 163,
+    "AB188": 185,
+    "AB189": 178,
+    "AB190": 160,
+    "AB191": 163,
+    "AB192": 170,
+    "AB193": 185,
+    "AB194": 160,
+}
+
+_DEFAULT_HEIGHT_REF_CM = float(
+    np.mean(list(ENABL3S_SUBJECT_HEIGHTS_CM.values()))
+)  # ≈ 173.8 cm
+
 
 def save_fold_to_hdf5(
     file_path,
@@ -54,6 +72,9 @@ class IMUPreprocessor:
         anti_alias=True,
         max_trials_per_subject=None,
         val_split_seed=42,
+        normalization: str = "zscore",
+        height_ref_cm: float | None = None,
+        subject_heights: dict[str, float] | None = None,
     ):
         self.root_dir = root_dir
         self.window_size = window_size
@@ -63,6 +84,9 @@ class IMUPreprocessor:
         self.anti_alias = anti_alias
         self.max_trials_per_subject = max_trials_per_subject
         self.val_split_seed = val_split_seed
+        self.normalization = normalization
+        self.height_ref_cm = height_ref_cm if height_ref_cm is not None else _DEFAULT_HEIGHT_REF_CM
+        self.subject_heights = subject_heights if subject_heights is not None else ENABL3S_SUBJECT_HEIGHTS_CM
         self.leg_configs = {
             "right": {
                 "predictors": [
@@ -202,6 +226,13 @@ class IMUPreprocessor:
 
                 legs_to_process = ["right", "left"] if self.use_both_legs else ["right"]
                 Xw_trials, yw_trials, yw_vel_trials, aw_trials = [], [], [], []
+                h_i = self.subject_heights.get(subj_id, self.height_ref_cm)
+                if self.normalization == "height_minmax":
+                    accel_scale = self.height_ref_cm / h_i
+                    gyro_scale = float(np.sqrt(h_i / self.height_ref_cm))
+                else:
+                    accel_scale = gyro_scale = None
+
                 n_skipped = 0
                 for f in trial_files:
                     try:
@@ -209,6 +240,9 @@ class IMUPreprocessor:
                             X_raw, y_raw, y_vel_raw, mode_ids = (
                                 self._load_and_process_csv_from_zip(archive, f, leg=leg)
                             )
+                            if accel_scale is not None:
+                                X_raw[:, :3] *= accel_scale
+                                X_raw[:, 3:] *= gyro_scale
                             Xw, yw, yw_vel, aw = self.create_sliding_windows(
                                 X_raw, y_raw, y_vel_raw, mode_ids
                             )
@@ -313,7 +347,15 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
     max_trials_per_subject = cfg.dataset.get("max_trials_per_subject", None)
     val_split_seed = int(cfg.training.get("split_seed", 42))
 
-    logger.info("Preprocessing: anti_alias={}", anti_alias)
+    normalization = cfg.dataset.get("normalization", "zscore")
+    height_ref_cm = cfg.dataset.get("height_ref_cm", None)
+    if height_ref_cm is not None:
+        height_ref_cm = float(height_ref_cm)
+
+    logger.info("Preprocessing: anti_alias={}, normalization={}", anti_alias, normalization)
+    if normalization == "height_minmax":
+        ref = height_ref_cm if height_ref_cm is not None else _DEFAULT_HEIGHT_REF_CM
+        logger.info("Height normalization: h_ref={:.1f} cm", ref)
 
     preprocessor = IMUPreprocessor(
         root_dir=extract_dir,
@@ -325,6 +367,8 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
         anti_alias=anti_alias,
         max_trials_per_subject=max_trials_per_subject,
         val_split_seed=val_split_seed,
+        normalization=normalization,
+        height_ref_cm=height_ref_cm,
     )
     preprocessor.run(processed_dir)
 
