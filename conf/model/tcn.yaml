@@ -4,8 +4,8 @@ supports_pretrain: false
 tcn:
   input_features: 6
   d_model: 64
-  num_blocks: 4
-  kernel_size: 5
+  num_blocks: 3
+  kernel_size: 4
   dropout: 0.3
 
 optimizer:

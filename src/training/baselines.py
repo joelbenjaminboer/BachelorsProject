@@ -61,7 +61,7 @@ def evaluate_baselines(
         logger.warning("Baseline fit skipped: empty train loader")
         return {}
 
-    xtx += ridge * torch.eye(dim, device=device)
+    xtx = xtx + ridge * torch.eye(dim, device=device)
     weight = torch.linalg.solve(xtx, xty)  # [D, H]
 
     # --- Evaluate on test set ---
