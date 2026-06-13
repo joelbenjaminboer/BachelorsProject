@@ -4,11 +4,11 @@ supports_pretrain: true
 encoder:
   input_features: 6
   d_model: 256
-  num_heads: 16
-  num_layers: 7
+  num_heads: 4
+  num_layers: 10
   dim_feedforward: 1024
-  dropout: 0.1
-  head_dropout: 0.1
+  dropout: 0.27091993923871843
+  head_dropout: 0.006339032659033517
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0
@@ -22,7 +22,7 @@ encoder:
 optimizer:
   name: adamw
   lr: 2.0e-4
-  weight_decay: 0.001076103698025301
+  weight_decay: 0.0029106271159050775
   betas: [0.9, 0.999]
   eps: 1.0e-8
 
@@ -36,5 +36,5 @@ scheduler:
   min_lr: 1.0e-6
 
 multitask:
-  enabled: true
+  enabled: false
   velocity_loss_weight: 0.5347985810422528
