@@ -36,6 +36,29 @@ class _TCNBlock(nn.Module):
         return self.act(out + self.residual(x))
 
 
+class TCNHead(nn.Module):
+    """TCN-based regression head for the transformer encoder.
+
+    Takes the full sequence of transformer embeddings (already in d_model space)
+    and predicts the forecast via causal dilated convolutions over the last timestep.
+    """
+
+    def __init__(self, d_model: int, num_blocks: int, kernel_size: int, forecast_horizon: int, dropout: float = 0.1):
+        super().__init__()
+        self.blocks = nn.ModuleList([
+            _TCNBlock(d_model, d_model, kernel_size, dilation=2**i, dropout=dropout)
+            for i in range(num_blocks)
+        ])
+        self.head = nn.Linear(d_model, forecast_horizon)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, d_model)
+        x = x.transpose(1, 2)      # (B, d_model, T)
+        for block in self.blocks:
+            x = block(x)
+        return self.head(x[:, :, -1])  # (B, forecast_horizon)
+
+
 class TCN(nn.Module):
     """Temporal Convolutional Network for multi-step knee-angle forecasting from 6-channel IMU input.
 

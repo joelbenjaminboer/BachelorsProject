@@ -101,11 +101,6 @@ def main():
     ax.axvspan(context_len, context_len + horizon, color=BLUE, alpha=0.10)
     ax.axvline(context_len, color="0.4", linestyle="--", linewidth=1)
     ax.axhline(0, color="0.6", linewidth=0.7, zorder=0)
-    top = ax.get_ylim()[1]
-    ax.text(context_len / 2, top, "INPUT — 6 IMU features", ha="center", va="top",
-            color=GREEN, fontweight="bold", fontsize=11)
-    ax.text(context_len + horizon / 2, top, "TARGET — GONIO", ha="center", va="top",
-            color=BLUE, fontweight="bold", fontsize=11)
 
     ax.set_xlabel("Time (samples @ 100 Hz)")
     ax.set_ylabel("Standardized value (z-score, train stats)")
@@ -115,7 +110,7 @@ def main():
     ax.legend(ncol=7, fontsize=8, loc="upper center",
               bbox_to_anchor=(0.5, -0.08), frameon=False)
     ax.set_title(
-        f"Input → target (z-normalized) — fold {args.fold} ({args.split}):  "
+        f"Input → target (z-normalized)"
         f"6 IMU features ({context_len} samples)  →  knee GONIO ({horizon} samples)"
     )
     fig.savefig(args.out, dpi=150, bbox_inches="tight")

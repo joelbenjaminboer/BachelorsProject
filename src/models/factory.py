@@ -19,6 +19,9 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
     if positional_encoding_max_len is None:
         positional_encoding_max_len = effective_seq_len + extra_tokens
 
+    head_type = str(encoder_cfg.get("head_type", "linear"))
+    tcn_head_cfg = encoder_cfg.get("tcn_head", {})
+
     return IMU_Intent_Encoder(
         input_features=int(encoder_cfg.input_features),
         forecast_horizon=forecast_horizon,
@@ -33,6 +36,9 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
         pooling=str(encoder_cfg.get("pooling", "cls")),
         patch_size=patch_size,
         multitask=bool(cfg.model.get("multitask", {}).get("enabled", False)),
+        head_type=head_type,
+        tcn_head_num_blocks=int(tcn_head_cfg.get("num_blocks", 2)),
+        tcn_head_kernel_size=int(tcn_head_cfg.get("kernel_size", 3)),
     )
 
 

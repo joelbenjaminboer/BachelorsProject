@@ -19,11 +19,15 @@ class IMU_Intent_Encoder(nn.Module):
         pooling="cls",
         patch_size=None,
         multitask=False,
+        head_type="linear",
+        tcn_head_num_blocks=2,
+        tcn_head_kernel_size=3,
     ):
         super(IMU_Intent_Encoder, self).__init__()
         self.patch_size = patch_size
         self.pooling = pooling
         self.multitask = multitask
+        self.head_type = head_type
 
         proj_input_dim = input_features * patch_size if patch_size else input_features
         self.input_projection = nn.Linear(proj_input_dim, d_model)
@@ -54,12 +58,17 @@ class IMU_Intent_Encoder(nn.Module):
         recon_out_dim = input_features * patch_size if patch_size else input_features
         self.reconstruction_head = nn.Linear(d_model, recon_out_dim)
 
-        self.regression_head = nn.Sequential(
-            nn.Linear(d_model, dim_feedforward),
-            nn.GELU(),
-            nn.Dropout(head_dropout),
-            nn.Linear(dim_feedforward, forecast_horizon),
-        )
+        if head_type == "tcn":
+            from src.models.tcn import TCNHead
+            self.regression_head = TCNHead(d_model, tcn_head_num_blocks, tcn_head_kernel_size,
+                                           forecast_horizon, head_dropout)
+        else:
+            self.regression_head = nn.Sequential(
+                nn.Linear(d_model, dim_feedforward),
+                nn.GELU(),
+                nn.Dropout(head_dropout),
+                nn.Linear(dim_feedforward, forecast_horizon),
+            )
 
         if multitask:
             self.velocity_head = nn.Sequential(
@@ -96,6 +105,21 @@ class IMU_Intent_Encoder(nn.Module):
         encoded_x = self.norm(encoded_x)
 
         if task == "predict":
+            if self.head_type == "tcn":
+                seq = encoded_x[:, 1:, :]  # drop CLS token
+                angle_pred = self.regression_head(seq)
+                if self.multitask:
+                    if self.pooling == "cls":
+                        pooled = encoded_x[:, 0, :]
+                    elif self.pooling == "mean":
+                        pooled = seq.mean(dim=1)
+                    elif self.pooling.startswith("last_"):
+                        k = int(self.pooling.split("_")[-1])
+                        pooled = encoded_x[:, -k:, :].mean(dim=1)
+                    else:
+                        raise ValueError(f"Unknown pooling mode: {self.pooling!r}")
+                    return angle_pred, self.velocity_head(pooled)
+                return angle_pred
             if self.pooling == "cls":
                 pooled = encoded_x[:, 0, :]
             elif self.pooling == "mean":

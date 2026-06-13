@@ -14,6 +14,10 @@ encoder:
   positional_encoding_base: 10000.0
   pooling: cls       # cls / mean / last_25
   patch_size: 25     # null / 8 / 16 / 25
+  head_type: tcn  # linear / tcn
+  tcn_head:
+    num_blocks: 1
+    kernel_size: 3
 
 optimizer:
   name: adamw
