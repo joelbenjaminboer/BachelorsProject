@@ -1,9 +1,9 @@
 download: false
 preprocess: false
-hparam_search: true
-pretrain: false
-train: false
-eval: false
+hparam_search: false
+pretrain: true
+train: true
+eval: true
 
 all_folds: false
 all_folds_workers: 1

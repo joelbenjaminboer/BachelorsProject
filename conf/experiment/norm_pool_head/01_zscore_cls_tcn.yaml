@@ -1,0 +1,19 @@
+# @package _global_
+# Baseline combination: zscore normalisation, CLS pooling, TCN head.
+# All three are the current model defaults — useful as the reference point.
+
+version: "nph_01_zscore_cls_tcn"
+
+run:
+  preprocess: false
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    pooling: cls
+    head_type: tcn

@@ -1,0 +1,18 @@
+# @package _global_
+# zscore normalisation, mean pooling over patch tokens, linear regression head.
+
+version: "nph_04_zscore_mean_linear"
+
+run:
+  preprocess: false
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    pooling: mean
+    head_type: linear

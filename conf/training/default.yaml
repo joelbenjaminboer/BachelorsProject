@@ -1,5 +1,5 @@
 epochs: 50
-freeze_encoder_epochs: 0  # phase 1: train head only; 0 to disable
+freeze_encoder_epochs: 5  # phase 1: train head only; 0 to disable
 
 early_stopping:
   patience: 15        # stop after this many epochs without improvement

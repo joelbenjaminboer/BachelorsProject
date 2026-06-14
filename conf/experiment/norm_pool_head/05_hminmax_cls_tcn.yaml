@@ -1,0 +1,26 @@
+# @package _global_
+# Height-minmax normalisation, CLS pooling, TCN head.
+# Requires preprocessing with dataset.normalization=height_minmax first:
+#   python main.py run.preprocess=true run.train=false run.eval=false \
+#     dataset.normalization=height_minmax \
+#     dataset.processed_dir=data/processed/ENABL3S/100hz_heightminmax
+
+version: "nph_05_hminmax_cls_tcn"
+
+run:
+  preprocess: false
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+dataset:
+  normalization: height_minmax
+processed_dir: "data/processed/ENABL3S/100hz_height_oneleg_loso"
+
+model:
+  encoder:
+    pooling: cls
+    head_type: tcn

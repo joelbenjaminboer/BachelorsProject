@@ -1,0 +1,18 @@
+# @package _global_
+# zscore normalisation, mean pooling over patch tokens, TCN head.
+
+version: "nph_03_zscore_mean_tcn"
+
+run:
+  preprocess: false
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+model:
+  encoder:
+    pooling: mean
+    head_type: tcn

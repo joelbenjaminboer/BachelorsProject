@@ -1,0 +1,23 @@
+# @package _global_
+# Height-minmax normalisation, mean pooling over patch tokens, linear regression head.
+# See 05_hminmax_cls_tcn.yaml for preprocessing instructions.
+
+version: "nph_08_hminmax_mean_linear"
+
+run:
+  preprocess: false
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+dataset:
+  normalization: height_minmax
+processed_dir: "data/processed/ENABL3S/100hz_height_oneleg_loso"
+
+model:
+  encoder:
+    pooling: mean
+    head_type: linear
