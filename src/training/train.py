@@ -186,11 +186,11 @@ class Trainer:
         logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
         self.best_checkpoint_path = checkpoint_path
 
-    def _step_scheduler(self, val_loss: float):
+    def _step_scheduler(self, val_rmse: float):
         if self.scheduler is None:
             return
         if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-            self.scheduler.step(val_loss)
+            self.scheduler.step(val_rmse)
         else:
             self.scheduler.step()
 

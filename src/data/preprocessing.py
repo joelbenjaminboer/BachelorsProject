@@ -277,36 +277,23 @@ class IMUPreprocessor:
         logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
         for i, test_subj in enumerate(valid_subject_ids):
             X_test, y_test, yv_test, act_test = subject_data[test_subj]
-            train_subjs = [s for s in valid_subject_ids if s != test_subj]
 
-            X_train_trials, y_train_trials, yv_train_trials, act_train_trials = [], [], [], []
+            # Val subject rotates: next subject in list (wraps around), mirroring
+            # how the test subject rotates across folds.
+            val_subj = valid_subject_ids[(i + 1) % len(valid_subject_ids)]
+            X_val, y_val, yv_val, act_val = subject_data[val_subj]
+
+            train_subjs = [s for s in valid_subject_ids if s != test_subj and s != val_subj]
+
+            X_train, y_train, yv_train, act_train = [], [], [], []
             for subj in train_subjs:
                 X_trials, y_trials, yv_trials, a_trials = subject_data[subj]
-                X_train_trials.extend(X_trials)
-                y_train_trials.extend(y_trials)
-                yv_train_trials.extend(yv_trials)
-                act_train_trials.extend(a_trials)
+                X_train.extend(X_trials)
+                y_train.extend(y_trials)
+                yv_train.extend(yv_trials)
+                act_train.extend(a_trials)
 
-            # Shuffle trials (seeded) before the val slice so validation isn't
-            # just the first subject(s)' trials in load order.
-            rng = np.random.default_rng(self.val_split_seed)
-            perm = rng.permutation(len(X_train_trials))
-            X_train_trials = [X_train_trials[i] for i in perm]
-            y_train_trials = [y_train_trials[i] for i in perm]
-            yv_train_trials = [yv_train_trials[i] for i in perm]
-            act_train_trials = [act_train_trials[i] for i in perm]
-
-            n_total = len(X_train_trials)
-            n_val = max(1, int(0.1 * n_total))
-
-            X_val = X_train_trials[:n_val]
-            y_val = y_train_trials[:n_val]
-            yv_val = yv_train_trials[:n_val]
-            act_val = act_train_trials[:n_val]
-            X_train = X_train_trials[n_val:]
-            y_train = y_train_trials[n_val:]
-            yv_train = yv_train_trials[n_val:]
-            act_train = act_train_trials[n_val:]
+            logger.info(f"  fold_{test_subj}: test={test_subj}, val={val_subj}, train={train_subjs}")
 
             fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
             os.makedirs(fold_dir, exist_ok=True)
@@ -317,18 +304,9 @@ class IMUPreprocessor:
 
             save_fold_to_hdf5(
                 hdf5_path,
-                X_train,
-                y_train,
-                yv_train,
-                act_train,
-                X_val,
-                y_val,
-                yv_val,
-                act_val,
-                X_test,
-                y_test,
-                yv_test,
-                act_test,
+                X_train, y_train, yv_train, act_train,
+                X_val,   y_val,   yv_val,   act_val,
+                X_test,  y_test,  yv_test,  act_test,
             )
         logger.success(f"Successfully generated HDF5 folds in {output_dir}")
 
