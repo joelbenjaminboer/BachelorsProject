@@ -51,13 +51,29 @@ def _append_handcrafted_features(X_raw: np.ndarray) -> np.ndarray:
 
 def _per_subject_minmax(Xw_trials: list[np.ndarray]) -> list[np.ndarray]:
     """Scale every window of a single subject to [-1, 1] per feature, using that
-    subject's own min/max computed across all its windows."""
+    subject's own min/max computed across all its windows.
+
+    Memory-frugal: min/max are accumulated by streaming over trials (no big
+    concatenated copy), and the scaling is done in-place in float32, replacing
+    each trial array as it goes so the float64 originals are freed immediately.
+    """
     n_feat = Xw_trials[0].shape[-1]
-    allX = np.concatenate([w.reshape(-1, n_feat) for w in Xw_trials], axis=0)
-    smin = allX.min(axis=0)
-    smax = allX.max(axis=0)
-    denom = np.clip(smax - smin, 1e-8, None)
-    return [(2.0 * (w - smin) / denom - 1.0).astype(w.dtype) for w in Xw_trials]
+    smin = np.full(n_feat, np.inf, dtype=np.float64)
+    smax = np.full(n_feat, -np.inf, dtype=np.float64)
+    for w in Xw_trials:
+        flat = w.reshape(-1, n_feat)
+        smin = np.minimum(smin, flat.min(axis=0))
+        smax = np.maximum(smax, flat.max(axis=0))
+
+    smin = smin.astype(np.float32)
+    inv = (2.0 / np.clip(smax - smin, 1e-8, None)).astype(np.float32)
+    for i, w in enumerate(Xw_trials):
+        wf = w.astype(np.float32, copy=False)
+        wf -= smin
+        wf *= inv
+        wf -= 1.0
+        Xw_trials[i] = wf  # drop the float64 original now
+    return Xw_trials
 
 
 def save_fold_to_hdf5(
