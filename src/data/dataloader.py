@@ -1,3 +1,10 @@
+"""Per-fold HDF5 loading and DataLoader construction.
+
+Reads the LOSO fold tensors written by ``preprocessing.py``, computes z-score (or
+min-max) normalisation statistics from the *training* subset only, and wraps them
+in train/val/test ``DataLoader``s. Normalisation is applied lazily in
+``HDF5KneeDataset.__getitem__`` — the stored tensors stay in raw physical units."""
+
 import bisect
 from dataclasses import dataclass
 import os
@@ -66,10 +73,13 @@ class HDF5KneeDataset(Dataset):
         return self.total_samples
 
     def normalize_X(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply the configured IMU normalisation to a raw tensor (for external callers)."""
-        if self.norm_type == "minmax" and self.imu_min is not None and self.imu_max is not None:
-            denom = torch.clamp(self.imu_max - self.imu_min, min=1e-8)
-            return 2.0 * (x - self.imu_min) / denom - 1.0
+        """Apply the configured IMU normalisation to a tensor (for external callers).
+
+        For ``minmax`` the per-subject min-max scaling to [-1, 1] is already baked
+        into the stored data at preprocessing time, so this is an identity.
+        """
+        if self.norm_type == "minmax":
+            return x
         if self.imu_mean is not None and self.imu_std is not None:
             return (x - self.imu_mean) / self.imu_std
         return x
@@ -329,7 +339,9 @@ class FoldData:
     data_dir: str
 
 
-def load_fold_data(data_dir: str, normalization: str = "zscore") -> FoldData:
+def load_fold_data(
+    data_dir: str, normalization: str = "zscore", normalize_target: bool = True
+) -> FoldData:
     """Read a fold's tensors from HDF5 and compute train-subset normalisation stats."""
     data_file = Path(data_dir) / "data.h5"
     if not data_file.exists():
@@ -352,12 +364,19 @@ def load_fold_data(data_dir: str, normalization: str = "zscore") -> FoldData:
 
     norm_type = "minmax" if normalization == "height_minmax" else "zscore"
     logger.info("Computing IMU normalisation stats from training subset (mode={})", normalization)
+    # For height_minmax the per-subject min-max scaling to [-1, 1] is baked into
+    # the HDF5 at preprocessing; the dataloader only needs z-score stats (used in
+    # zscore mode) and applies no further IMU scaling in minmax mode.
     imu_mean, imu_std = _compute_train_imu_stats(X_train)
     imu_min = imu_max = None
-    if norm_type == "minmax":
-        imu_min, imu_max = _compute_train_imu_minmax(X_train)
-        logger.debug("IMU min-max range per feature: min={}, max={}", imu_min.tolist(), imu_max.tolist())
-    y_mean, y_std = _compute_train_y_stats(y_train)
+
+    if normalize_target:
+        y_mean, y_std = _compute_train_y_stats(y_train)
+    else:
+        # Target stays in raw physical units (degrees). Storing 0/1 makes every
+        # downstream de-norm (eval, baselines, val RMSE) an identity automatically.
+        logger.info("Target normalisation disabled — knee angle kept in raw degrees")
+        y_mean, y_std = torch.tensor(0.0), torch.tensor(1.0)
 
     yv_train_clean = _none_free(yv_train)
     yv_val_clean = _none_free(yv_val)
@@ -518,6 +537,7 @@ def build_loaders_from_fold(
         "fold_dir": fold.data_dir,
         "y_mean": fold.y_mean.item(),
         "y_std": fold.y_std.item(),
+        "n_features": int(fold.X_train[0].shape[-1]) if fold.X_train else None,
     }
 
     if y_vel_mean is not None:
@@ -538,9 +558,10 @@ def build_dataloaders(
     aug_cfg: Optional[dict] = None,
     multitask: bool = False,
     normalization: str = "zscore",
+    normalize_target: bool = True,
 ):
     """Load a fold from disk and build its train/val/test DataLoaders."""
-    fold = load_fold_data(data_dir, normalization=normalization)
+    fold = load_fold_data(data_dir, normalization=normalization, normalize_target=normalize_target)
     return build_loaders_from_fold(
         fold,
         batch_size=batch_size,

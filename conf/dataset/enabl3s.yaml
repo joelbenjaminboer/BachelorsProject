@@ -2,7 +2,7 @@ url: "https://figshare.com/ndownloader/articles/5362627/versions/3"
 raw_data_dir: "data/raw"
 output_zip: "data/raw/ENABL3S.zip"
 extract_dir: "data/raw/ENABL3S"
-processed_dir: "data/processed/ENABL3S/100hz"
+processed_dir: "data/processed/ENABL3S/100hz_height"
 original_freq: 500
 target_freq: 100
 use_both_legs: true
@@ -10,8 +10,16 @@ anti_alias: true
 max_trials_per_subject: null   # cap CSV trials per subject; null = use all
 
 # Normalization strategy: "zscore" (global z-score) or "height_minmax"
-# (per-subject height scaling then per-feature min-max to [-1, 1]).
-# Switching between modes requires re-running preprocessing (run.preprocess=true).
-normalization: zscore
+# (per-subject height scaling then per-subject min-max to [-1, 1], baked in at
+# preprocessing). Switching modes requires re-running preprocessing
+# (run.preprocess=true) into a matching processed_dir.
+normalization: height_minmax
 # Reference height (cm) for height normalization. null = mean of all dataset subjects.
 height_ref_cm: null
+# Normalize the regression target (knee angle)? false = predict raw degrees
+# (paper-style). true = z-score the target. Independent of IMU normalization.
+normalize_target: false
+# Append the paper's 4 handcrafted IMU features (Accel_L2, Gyro_L2, Accel_M,
+# Gyro_M) → 10 input features instead of 6. Requires input_features=10 in the
+# model config and re-running preprocessing.
+handcrafted_features: false

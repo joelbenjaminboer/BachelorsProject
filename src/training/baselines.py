@@ -33,9 +33,10 @@ def evaluate_baselines(
     ridge: float = 1.0e-3,
 ) -> dict[str, float]:
     """Fit a linear baseline on train and evaluate it (and the mean predictor)
-    on the test set. Returns RMSE values in degrees. Inputs/targets arrive
-    z-scored from the dataloader; we report in degrees by scaling with y_std
-    (the affine mean cancels in the error)."""
+    on the test set. Returns RMSE values in degrees. The target arrives from the
+    dataloader either z-scored or in raw degrees; we report in degrees by scaling
+    with y_std (which is 1.0 when the target is unnormalised, so this is then a
+    no-op). The affine mean cancels in the error either way."""
     device = ctx.device
     y_std = ctx.split_info.get("y_std")
     scale = float(y_std) if y_std is not None else 1.0

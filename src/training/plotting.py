@@ -1,4 +1,5 @@
 import matplotlib
+
 matplotlib.use("Agg")  # non-interactive backend — safe to call from any thread
 
 import json

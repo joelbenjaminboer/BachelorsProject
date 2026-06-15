@@ -1,6 +1,11 @@
+"""ENABL3S preprocessing: read raw IMU CSVs from per-subject ZIPs, filter
+activities, downsample 500 Hz → 100 Hz, build sliding windows, and write one
+HDF5 file per Leave-One-Subject-Out fold under ``data/processed/``."""
+
 from glob import glob
 import io
 import os
+import random
 import zipfile
 
 import h5py
@@ -25,9 +30,34 @@ ENABL3S_SUBJECT_HEIGHTS_CM: dict[str, float] = {
     "AB194": 160,
 }
 
-_DEFAULT_HEIGHT_REF_CM = float(
-    np.mean(list(ENABL3S_SUBJECT_HEIGHTS_CM.values()))
-)  # ≈ 173.8 cm
+_DEFAULT_HEIGHT_REF_CM = float(np.mean(list(ENABL3S_SUBJECT_HEIGHTS_CM.values())))  # ≈ 173.8 cm
+
+
+def _append_handcrafted_features(X_raw: np.ndarray) -> np.ndarray:
+    """Append the paper's 4 handcrafted features (eqs 1–4) to the 6 raw IMU
+    channels, yielding 10: [Ax,Ay,Az,Gx,Gy,Gz, Accel_L2,Gyro_L2,Accel_M,Gyro_M].
+
+    Computed on the (already height-scaled) accel/gyro so the derived features
+    inherit the same body-size compensation.
+    """
+    accel = X_raw[:, :3]
+    gyro = X_raw[:, 3:6]
+    accel_l2 = np.sqrt(np.sum(accel**2, axis=1, keepdims=True))
+    gyro_l2 = np.sqrt(np.sum(gyro**2, axis=1, keepdims=True))
+    accel_m = np.mean(accel, axis=1, keepdims=True)
+    gyro_m = np.mean(gyro, axis=1, keepdims=True)
+    return np.concatenate([X_raw, accel_l2, gyro_l2, accel_m, gyro_m], axis=1)
+
+
+def _per_subject_minmax(Xw_trials: list[np.ndarray]) -> list[np.ndarray]:
+    """Scale every window of a single subject to [-1, 1] per feature, using that
+    subject's own min/max computed across all its windows."""
+    n_feat = Xw_trials[0].shape[-1]
+    allX = np.concatenate([w.reshape(-1, n_feat) for w in Xw_trials], axis=0)
+    smin = allX.min(axis=0)
+    smax = allX.max(axis=0)
+    denom = np.clip(smax - smin, 1e-8, None)
+    return [(2.0 * (w - smin) / denom - 1.0).astype(w.dtype) for w in Xw_trials]
 
 
 def save_fold_to_hdf5(
@@ -71,10 +101,12 @@ class IMUPreprocessor:
         use_both_legs=False,
         anti_alias=True,
         max_trials_per_subject=None,
-        val_split_seed=42,
         normalization: str = "zscore",
         height_ref_cm: float | None = None,
         subject_heights: dict[str, float] | None = None,
+        handcrafted_features: bool = False,
+        val_ratio: float = 0.1,
+        split_seed: int = 42,
     ):
         self.root_dir = root_dir
         self.window_size = window_size
@@ -83,10 +115,14 @@ class IMUPreprocessor:
         self.use_both_legs = use_both_legs
         self.anti_alias = anti_alias
         self.max_trials_per_subject = max_trials_per_subject
-        self.val_split_seed = val_split_seed
         self.normalization = normalization
         self.height_ref_cm = height_ref_cm if height_ref_cm is not None else _DEFAULT_HEIGHT_REF_CM
-        self.subject_heights = subject_heights if subject_heights is not None else ENABL3S_SUBJECT_HEIGHTS_CM
+        self.subject_heights = (
+            subject_heights if subject_heights is not None else ENABL3S_SUBJECT_HEIGHTS_CM
+        )
+        self.handcrafted_features = handcrafted_features
+        self.val_ratio = val_ratio
+        self.split_seed = split_seed
         self.leg_configs = {
             "right": {
                 "predictors": [
@@ -242,7 +278,9 @@ class IMUPreprocessor:
                             )
                             if accel_scale is not None:
                                 X_raw[:, :3] *= accel_scale
-                                X_raw[:, 3:] *= gyro_scale
+                                X_raw[:, 3:6] *= gyro_scale
+                            if self.handcrafted_features:
+                                X_raw = _append_handcrafted_features(X_raw)
                             Xw, yw, yw_vel, aw = self.create_sliding_windows(
                                 X_raw, y_raw, y_vel_raw, mode_ids
                             )
@@ -265,6 +303,12 @@ class IMUPreprocessor:
                     )
 
                 if Xw_trials:
+                    # Stage 2 (paper §2.2.2): per-subject min-max to [-1, 1], using
+                    # this subject's own per-feature range over all its windows. Each
+                    # subject (incl. the held-out test subject) is scaled by its own
+                    # stats, which removes inter-subject amplitude differences.
+                    if self.normalization == "height_minmax":
+                        Xw_trials = _per_subject_minmax(Xw_trials)
                     subject_data[subj_id] = (Xw_trials, yw_trials, yw_vel_trials, aw_trials)
 
         valid_subject_ids = list(subject_data.keys())
@@ -278,22 +322,39 @@ class IMUPreprocessor:
         for i, test_subj in enumerate(valid_subject_ids):
             X_test, y_test, yv_test, act_test = subject_data[test_subj]
 
-            # Val subject rotates: next subject in list (wraps around), mirroring
-            # how the test subject rotates across folds.
-            val_subj = valid_subject_ids[(i + 1) % len(valid_subject_ids)]
-            X_val, y_val, yv_val, act_val = subject_data[val_subj]
-
-            train_subjs = [s for s in valid_subject_ids if s != test_subj and s != val_subj]
+            # Test = held-out subject (LOSO). Validation = a per-subject slice of
+            # the remaining subjects' trials (val_ratio of EACH subject's trials),
+            # so val is drawn from the same distribution as train. Trial-level
+            # (not window-level) to avoid leakage between overlapping windows.
+            train_subjs = [s for s in valid_subject_ids if s != test_subj]
+            rng = random.Random(self.split_seed + i)
 
             X_train, y_train, yv_train, act_train = [], [], [], []
+            X_val, y_val, yv_val, act_val = [], [], [], []
             for subj in train_subjs:
                 X_trials, y_trials, yv_trials, a_trials = subject_data[subj]
-                X_train.extend(X_trials)
-                y_train.extend(y_trials)
-                yv_train.extend(yv_trials)
-                act_train.extend(a_trials)
+                n_trials = len(X_trials)
+                n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
+                order = list(range(n_trials))
+                rng.shuffle(order)
+                val_idx = set(order[:n_val])
+                for t in range(n_trials):
+                    if t in val_idx:
+                        X_val.append(X_trials[t])
+                        y_val.append(y_trials[t])
+                        yv_val.append(yv_trials[t])
+                        act_val.append(a_trials[t])
+                    else:
+                        X_train.append(X_trials[t])
+                        y_train.append(y_trials[t])
+                        yv_train.append(yv_trials[t])
+                        act_train.append(a_trials[t])
 
-            logger.info(f"  fold_{test_subj}: test={test_subj}, val={val_subj}, train={train_subjs}")
+            logger.info(
+                f"  fold_{test_subj}: test={test_subj}, "
+                f"train_trials={len(X_train)}, val_trials={len(X_val)}, "
+                f"train_subjects={train_subjs}"
+            )
 
             fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
             os.makedirs(fold_dir, exist_ok=True)
@@ -304,9 +365,18 @@ class IMUPreprocessor:
 
             save_fold_to_hdf5(
                 hdf5_path,
-                X_train, y_train, yv_train, act_train,
-                X_val,   y_val,   yv_val,   act_val,
-                X_test,  y_test,  yv_test,  act_test,
+                X_train,
+                y_train,
+                yv_train,
+                act_train,
+                X_val,
+                y_val,
+                yv_val,
+                act_val,
+                X_test,
+                y_test,
+                yv_test,
+                act_test,
             )
         logger.success(f"Successfully generated HDF5 folds in {output_dir}")
 
@@ -323,14 +393,23 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
     use_both_legs = cfg.dataset.get("use_both_legs", False)
     anti_alias = cfg.dataset.get("anti_alias", True)
     max_trials_per_subject = cfg.dataset.get("max_trials_per_subject", None)
-    val_split_seed = int(cfg.training.get("split_seed", 42))
 
     normalization = cfg.dataset.get("normalization", "zscore")
     height_ref_cm = cfg.dataset.get("height_ref_cm", None)
     if height_ref_cm is not None:
         height_ref_cm = float(height_ref_cm)
 
-    logger.info("Preprocessing: anti_alias={}, normalization={}", anti_alias, normalization)
+    handcrafted_features = bool(cfg.dataset.get("handcrafted_features", False))
+    split_seed = int(cfg.training.get("split_seed", 42))
+    val_ratio = 1.0 - float(cfg.training.get("split_ratio", 0.9))
+
+    logger.info(
+        "Preprocessing: anti_alias={}, normalization={}, handcrafted_features={}, val_ratio={:.2f}",
+        anti_alias,
+        normalization,
+        handcrafted_features,
+        val_ratio,
+    )
     if normalization == "height_minmax":
         ref = height_ref_cm if height_ref_cm is not None else _DEFAULT_HEIGHT_REF_CM
         logger.info("Height normalization: h_ref={:.1f} cm", ref)
@@ -344,9 +423,11 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
         use_both_legs=use_both_legs,
         anti_alias=anti_alias,
         max_trials_per_subject=max_trials_per_subject,
-        val_split_seed=val_split_seed,
         normalization=normalization,
         height_ref_cm=height_ref_cm,
+        handcrafted_features=handcrafted_features,
+        val_ratio=val_ratio,
+        split_seed=split_seed,
     )
     preprocessor.run(processed_dir)
 

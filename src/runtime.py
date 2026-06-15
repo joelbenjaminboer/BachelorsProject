@@ -118,8 +118,13 @@ def resolve_autocast_kwargs(cfg: DictConfig, device: torch.device):
     if not enabled:
         return None
 
-    dtype_name = str(autocast_cfg.get("dtype", "float16")).strip().lower()
-    if dtype_name in {"bf16", "bfloat16"}:
+    dtype_name = str(autocast_cfg.get("dtype", "auto")).strip().lower()
+    if dtype_name == "auto":
+        # Prefer bf16 on CUDA where it's supported (wider exponent range, no
+        # GradScaler needed); fall back to fp16 elsewhere (incl. MPS).
+        use_bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
+        dtype = torch.bfloat16 if use_bf16 else torch.float16
+    elif dtype_name in {"bf16", "bfloat16"}:
         dtype = torch.bfloat16 if device.type == "cuda" else torch.float16
     else:
         dtype = torch.float16
@@ -318,6 +323,7 @@ def build_run_context(
     aug_cfg = dict(cfg.training.get("augmentation", {})) or None
     multitask_enabled = bool(cfg.model.get("multitask", {}).get("enabled", False))
     normalization = cfg.dataset.get("normalization", "zscore")
+    normalize_target = bool(cfg.dataset.get("normalize_target", True))
 
     if fold_data is not None:
         # Reuse pre-loaded tensors (e.g. Optuna trials) — no HDF5 re-read, no
@@ -338,7 +344,23 @@ def build_run_context(
             aug_cfg=aug_cfg,
             multitask=multitask_enabled,
             normalization=normalization,
+            normalize_target=normalize_target,
             **loader_kwargs,
+        )
+
+    # Guard against a silent train/eval mismatch when the data's IMU feature
+    # count (e.g. 6 raw vs 10 with handcrafted features) differs from the model
+    # config. Fail loudly with a fix hint rather than producing garbage.
+    model_type = str(cfg.model.get("model_type", "encoder")).lower()
+    arch_key = model_type if model_type in ("encoder", "timesnet", "tcn") else "encoder"
+    configured_feats = int(cfg.model[arch_key].input_features)
+    data_feats = split_info.get("n_features")
+    if data_feats is not None and data_feats != configured_feats:
+        raise ValueError(
+            f"Input feature mismatch: the processed data has {data_feats} IMU "
+            f"features but cfg.model.{arch_key}.input_features={configured_feats}. "
+            f"Set input_features={data_feats}, or regenerate the data with the "
+            f"matching dataset.handcrafted_features setting."
         )
 
     logger.info(f"Using device: {device}")

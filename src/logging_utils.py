@@ -30,10 +30,7 @@ _CONSOLE_FORMAT = (
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>"
 )
-_FILE_FORMAT = (
-    "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | "
-    "{name}:{function}:{line} - {message}"
-)
+_FILE_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
 
 
 class _PropagateHandler(logging.Handler):

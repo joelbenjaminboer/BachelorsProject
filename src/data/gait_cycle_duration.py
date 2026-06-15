@@ -78,7 +78,8 @@ def compute_avg_gait_cycle_duration(raw_dir: str = RAW_DIR) -> dict:
 
         with zipfile.ZipFile(zip_path) as archive:
             trial_members = sorted(
-                m for m in archive.namelist()
+                m
+                for m in archive.namelist()
                 if m.lower().startswith(f"{subject_id.lower()}/processed/")
                 and m.lower().endswith(".csv")
             )[:40]

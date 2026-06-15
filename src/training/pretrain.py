@@ -16,7 +16,10 @@ from src.runtime import (
 )
 from src.training.plotting import save_pretrain_artifacts, should_save_intermediate_epoch
 
-CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx")
+# First 6 are the raw IMU channels; the last 4 are the optional handcrafted
+# features (dataset.handcrafted_features). Per-channel logging indexes this tuple,
+# so it must cover the configured input_features count (6 or 10).
+CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx", "AccL2", "GyrL2", "AccM", "GyrM")
 
 
 def _patchify_target(x: torch.Tensor, patch_size: int) -> torch.Tensor:

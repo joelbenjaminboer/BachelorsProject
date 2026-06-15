@@ -1,0 +1,32 @@
+# @package _global_
+# Paper-aligned setup: per-subject height_minmax IMU normalisation, unnormalized
+# target (raw degrees), 10 handcrafted IMU features (6 raw + Accel_L2/Gyro_L2/
+# Accel_M/Gyro_M), transformer encoder with a sequence-level TCN head.
+#
+# Requires preprocessing into the matching dir first:
+#   python main.py run.preprocess=true run.pretrain=false run.train=false run.eval=false \
+#     dataset.normalization=height_minmax dataset.handcrafted_features=true \
+#     dataset.processed_dir=data/processed/ENABL3S/100hz_height_feat10
+
+version: "hminmax_feat10_tcnhead"
+
+run:
+  preprocess: true
+  pretrain: false
+  train: true
+  eval: true
+
+training:
+  epochs: 20
+
+dataset:
+  normalization: height_minmax
+  normalize_target: false
+  handcrafted_features: true
+  processed_dir: "data/processed/ENABL3S/100hz_height_feat10"
+
+model:
+  encoder:
+    input_features: 10
+    pooling: mean
+    head_type: tcn

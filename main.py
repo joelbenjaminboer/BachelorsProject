@@ -169,12 +169,18 @@ def main(cfg: DictConfig):
             cfg.model.get("model_type", "encoder"),
         )
 
+    pretrained_ckpt = None
     if will_pretrain:
-        run_pretrain(cfg, model=model, ctx=ctx)
+        pretrained_ckpt = run_pretrain(cfg, model=model, ctx=ctx)
 
     best_checkpoint_path = None
     if run_cfg.get("train", False):
-        if not will_pretrain and run_cfg.get("load_checkpoint", False):
+        # Fine-tune from the *best* pretrained checkpoint (lowest val loss), not the
+        # last-epoch in-memory weights left behind by the pretraining loop.
+        if pretrained_ckpt is not None and Path(pretrained_ckpt).exists():
+            state = torch.load(pretrained_ckpt, map_location=ctx.device)
+            load_state_into_model(model, state, source=str(pretrained_ckpt))
+        elif not will_pretrain and run_cfg.get("load_checkpoint", False):
             checkpoint_path = Path(run_cfg.get("checkpoint_path", ""))
             if checkpoint_path.exists():
                 state = torch.load(checkpoint_path, map_location=ctx.device)
