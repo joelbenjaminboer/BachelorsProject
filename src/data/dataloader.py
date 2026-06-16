@@ -177,10 +177,15 @@ def load_trials_from_hdf5(filepath: str):
             for key in sorted(f[group].keys()):
                 if key.startswith("X_"):
                     idx = key.split("_")[1]
-                    # Cast to float32 on load: the source arrays are float64
-                    # (pandas default), which doubles resident RAM. The model
-                    # trains in float32, so storing doubles wastes ~2x memory.
-                    X = torch.tensor(f[f"{group}/X_{idx}"][:]).float()
+                    # Store IMU inputs as float16 to halve resident RAM (the full
+                    # dataset is ~28 GB in fp32 and was spilling into swap). The
+                    # model trains under fp16 autocast, which rounds the input to
+                    # fp16 at the first linear layer anyway, and __getitem__ /
+                    # _compute_train_imu_stats upcast via .float() — so this is
+                    # numerically identity for height_minmax (the input flows
+                    # straight to the matmul) and a sub-fp16 rounding difference
+                    # for zscore. Targets stay fp32 for exact loss computation.
+                    X = torch.tensor(f[f"{group}/X_{idx}"][:]).half()
                     y = torch.tensor(f[f"{group}/y_{idx}"][:]).float()
                     X_list.append(X)
                     y_list.append(y)
