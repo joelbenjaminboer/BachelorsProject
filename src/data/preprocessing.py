@@ -299,7 +299,6 @@ class IMUPreprocessor:
                     trial_files = trial_files[: self.max_trials_per_subject]
 
                 legs_to_process = ["right", "left"] if self.use_both_legs else ["right"]
-                Xw_trials, yw_trials, yw_vel_trials, aw_trials = [], [], [], []
                 h_i = self.subject_heights.get(subj_id, self.height_ref_cm)
                 if self.normalization == "height_minmax":
                     accel_scale = self.height_ref_cm / h_i
@@ -307,29 +306,47 @@ class IMUPreprocessor:
                 else:
                     accel_scale = gyro_scale = None
 
+                tmp_path = os.path.join(output_dir, f"_tmp_{subj_id}.h5")
                 n_skipped = 0
-                for f in trial_files:
-                    try:
-                        for leg in legs_to_process:
-                            X_raw, y_raw, y_vel_raw, mode_ids = (
-                                self._load_and_process_csv_from_zip(archive, f, leg=leg)
-                            )
-                            if accel_scale is not None:
-                                X_raw[:, :3] *= accel_scale
-                                X_raw[:, 3:6] *= gyro_scale
-                            if self.handcrafted_features:
-                                X_raw = _append_handcrafted_features(X_raw)
-                            Xw, yw, yw_vel, aw = self.create_sliding_windows(
-                                X_raw, y_raw, y_vel_raw, mode_ids
-                            )
-                            if len(Xw) > 0:
-                                Xw_trials.append(Xw)
-                                yw_trials.append(yw)
-                                yw_vel_trials.append(yw_vel)
-                                aw_trials.append(aw)
-                    except Exception as e:
-                        logger.warning(f"Skipped {f}: {e}")
-                        n_skipped += 1
+                trial_idx = 0
+                # Running min/max for per-subject normalisation (no full copy in RAM).
+                smin = smax = None
+                with h5py.File(tmp_path, "w") as htmp:
+                    for f in trial_files:
+                        try:
+                            for leg in legs_to_process:
+                                X_raw, y_raw, y_vel_raw, mode_ids = (
+                                    self._load_and_process_csv_from_zip(archive, f, leg=leg)
+                                )
+                                if accel_scale is not None:
+                                    X_raw[:, :3] *= accel_scale
+                                    X_raw[:, 3:6] *= gyro_scale
+                                if self.handcrafted_features:
+                                    X_raw = _append_handcrafted_features(X_raw)
+                                Xw, yw, yw_vel, aw = self.create_sliding_windows(
+                                    X_raw, y_raw, y_vel_raw, mode_ids
+                                )
+                                del X_raw, y_raw, y_vel_raw, mode_ids
+                                if len(Xw) > 0:
+                                    # Accumulate min/max without keeping all windows.
+                                    if self.normalization == "height_minmax":
+                                        flat = Xw.reshape(-1, Xw.shape[-1])
+                                        if smin is None:
+                                            n_feat = Xw.shape[-1]
+                                            smin = np.full(n_feat, np.inf, dtype=np.float64)
+                                            smax = np.full(n_feat, -np.inf, dtype=np.float64)
+                                        smin = np.minimum(smin, flat.min(axis=0))
+                                        smax = np.maximum(smax, flat.max(axis=0))
+                                    htmp.create_dataset(f"X_{trial_idx}", data=Xw, compression="gzip")
+                                    htmp.create_dataset(f"y_{trial_idx}", data=yw, compression="gzip")
+                                    htmp.create_dataset(f"yv_{trial_idx}", data=yw_vel, compression="gzip")
+                                    htmp.create_dataset(f"a_{trial_idx}", data=aw, compression="gzip")
+                                    trial_idx += 1
+                                    del Xw, yw, yw_vel, aw
+                        except Exception as e:
+                            logger.warning(f"Skipped {f}: {e}")
+                            n_skipped += 1
+
                 if n_skipped:
                     logger.warning(
                         "{}: skipped {}/{} trial files", subj_id, n_skipped, len(trial_files)
@@ -340,17 +357,25 @@ class IMUPreprocessor:
                         subj_id,
                     )
 
-                if Xw_trials:
-                    # Stage 2 (paper §2.2.2): per-subject min-max to [-1, 1], using
-                    # this subject's own per-feature range over all its windows. Each
-                    # subject (incl. the held-out test subject) is scaled by its own
-                    # stats, which removes inter-subject amplitude differences.
-                    if self.normalization == "height_minmax":
-                        Xw_trials = _per_subject_minmax(Xw_trials)
-                    tmp_path = os.path.join(output_dir, f"_tmp_{subj_id}.h5")
-                    _save_subject_temp(tmp_path, Xw_trials, yw_trials, yw_vel_trials, aw_trials)
+                if trial_idx > 0:
+                    # Stage 2 (paper §2.2.2): per-subject min-max to [-1, 1]. Apply
+                    # in-place directly in the temp HDF5 — one trial in RAM at a time.
+                    if self.normalization == "height_minmax" and smin is not None:
+                        smin_f = smin.astype(np.float32)
+                        inv = (2.0 / np.clip(smax - smin, 1e-8, None)).astype(np.float32)
+                        with h5py.File(tmp_path, "a") as htmp:
+                            for idx in range(trial_idx):
+                                key = f"X_{idx}"
+                                w = htmp[key][:].astype(np.float32)
+                                w -= smin_f
+                                w *= inv
+                                w -= 1.0
+                                del htmp[key]
+                                htmp.create_dataset(key, data=w, compression="gzip")
+                                del w
                     subject_temp_files[subj_id] = tmp_path
-                    del Xw_trials, yw_trials, yw_vel_trials, aw_trials
+                else:
+                    os.remove(tmp_path)
 
         valid_subject_ids = list(subject_temp_files.keys())
         if not valid_subject_ids:
