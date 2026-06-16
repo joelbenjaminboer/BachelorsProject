@@ -387,68 +387,68 @@ class IMUPreprocessor:
         logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
         try:
             for i, test_subj in enumerate(valid_subject_ids):
-                X_test, y_test, yv_test, act_test = _load_subject_temp(subject_temp_files[test_subj])
-
-                # Test = held-out subject (LOSO). Validation = a per-subject slice of
-                # the remaining subjects' trials (val_ratio of EACH subject's trials),
-                # so val is drawn from the same distribution as train. Trial-level
-                # (not window-level) to avoid leakage between overlapping windows.
                 train_subjs = [s for s in valid_subject_ids if s != test_subj]
                 rng = random.Random(self.split_seed + i)
 
-                X_train, y_train, yv_train, act_train = [], [], [], []
-                X_val, y_val, yv_val, act_val = [], [], [], []
-                for subj in train_subjs:
-                    X_trials, y_trials, yv_trials, a_trials = _load_subject_temp(subject_temp_files[subj])
-                    n_trials = len(X_trials)
-                    n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
-                    order = list(range(n_trials))
-                    rng.shuffle(order)
-                    val_idx = set(order[:n_val])
-                    for t in range(n_trials):
-                        if t in val_idx:
-                            X_val.append(X_trials[t])
-                            y_val.append(y_trials[t])
-                            yv_val.append(yv_trials[t])
-                            act_val.append(a_trials[t])
-                        else:
-                            X_train.append(X_trials[t])
-                            y_train.append(y_trials[t])
-                            yv_train.append(yv_trials[t])
-                            act_train.append(a_trials[t])
-                    del X_trials, y_trials, yv_trials, a_trials
-
-                logger.info(
-                    f"  fold_{test_subj}: test={test_subj}, "
-                    f"train_trials={len(X_train)}, val_trials={len(X_val)}, "
-                    f"train_subjects={train_subjs}"
-                )
-
                 fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
                 os.makedirs(fold_dir, exist_ok=True)
-
                 hdf5_path = os.path.join(fold_dir, "data.h5")
                 if os.path.exists(hdf5_path):
                     os.remove(hdf5_path)
 
-                save_fold_to_hdf5(
-                    hdf5_path,
-                    X_train,
-                    y_train,
-                    yv_train,
-                    act_train,
-                    X_val,
-                    y_val,
-                    yv_val,
-                    act_val,
-                    X_test,
-                    y_test,
-                    yv_test,
-                    act_test,
+                train_count = val_count = 0
+                with h5py.File(hdf5_path, "w") as hfold:
+                    train_grp = hfold.create_group("train")
+                    val_grp = hfold.create_group("val")
+                    test_grp = hfold.create_group("test")
+
+                    # Write test subject directly — one subject in RAM at a time.
+                    X_test, y_test, yv_test, act_test = _load_subject_temp(
+                        subject_temp_files[test_subj]
+                    )
+                    for t, (x, y, yv, a) in enumerate(
+                        zip(X_test, y_test, yv_test, act_test)
+                    ):
+                        test_grp.create_dataset(f"X_{t}", data=x, compression="gzip")
+                        test_grp.create_dataset(f"y_{t}", data=y, compression="gzip")
+                        test_grp.create_dataset(f"yv_{t}", data=yv, compression="gzip")
+                        test_grp.create_dataset(f"a_{t}", data=a, compression="gzip")
+                    del X_test, y_test, yv_test, act_test
+
+                    # Write each train subject immediately; never accumulate across subjects.
+                    # Test = held-out subject (LOSO). Validation = a per-subject slice of
+                    # the remaining subjects' trials (val_ratio of EACH subject's trials),
+                    # so val is drawn from the same distribution as train. Trial-level
+                    # (not window-level) to avoid leakage between overlapping windows.
+                    for subj in train_subjs:
+                        X_trials, y_trials, yv_trials, a_trials = _load_subject_temp(
+                            subject_temp_files[subj]
+                        )
+                        n_trials = len(X_trials)
+                        n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
+                        order = list(range(n_trials))
+                        rng.shuffle(order)
+                        val_idx = set(order[:n_val])
+                        for t in range(n_trials):
+                            if t in val_idx:
+                                val_grp.create_dataset(f"X_{val_count}", data=X_trials[t], compression="gzip")
+                                val_grp.create_dataset(f"y_{val_count}", data=y_trials[t], compression="gzip")
+                                val_grp.create_dataset(f"yv_{val_count}", data=yv_trials[t], compression="gzip")
+                                val_grp.create_dataset(f"a_{val_count}", data=a_trials[t], compression="gzip")
+                                val_count += 1
+                            else:
+                                train_grp.create_dataset(f"X_{train_count}", data=X_trials[t], compression="gzip")
+                                train_grp.create_dataset(f"y_{train_count}", data=y_trials[t], compression="gzip")
+                                train_grp.create_dataset(f"yv_{train_count}", data=yv_trials[t], compression="gzip")
+                                train_grp.create_dataset(f"a_{train_count}", data=a_trials[t], compression="gzip")
+                                train_count += 1
+                        del X_trials, y_trials, yv_trials, a_trials
+
+                logger.info(
+                    f"  fold_{test_subj}: test={test_subj}, "
+                    f"train_trials={train_count}, val_trials={val_count}, "
+                    f"train_subjects={train_subjs}"
                 )
-                del X_train, y_train, yv_train, act_train
-                del X_val, y_val, yv_val, act_val
-                del X_test, y_test, yv_test, act_test
         finally:
             for tmp_path in subject_temp_files.values():
                 if os.path.exists(tmp_path):
