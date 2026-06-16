@@ -76,6 +76,28 @@ def _per_subject_minmax(Xw_trials: list[np.ndarray]) -> list[np.ndarray]:
     return Xw_trials
 
 
+def _save_subject_temp(path, Xw_trials, yw_trials, yw_vel_trials, aw_trials):
+    with h5py.File(path, "w") as f:
+        for i, (x, y, yv, a) in enumerate(zip(Xw_trials, yw_trials, yw_vel_trials, aw_trials)):
+            f.create_dataset(f"X_{i}", data=x, compression="gzip")
+            f.create_dataset(f"y_{i}", data=y, compression="gzip")
+            f.create_dataset(f"yv_{i}", data=yv, compression="gzip")
+            f.create_dataset(f"a_{i}", data=a, compression="gzip")
+
+
+def _load_subject_temp(path):
+    Xw, yw, yw_vel, aw = [], [], [], []
+    with h5py.File(path, "r") as f:
+        i = 0
+        while f"X_{i}" in f:
+            Xw.append(f[f"X_{i}"][:])
+            yw.append(f[f"y_{i}"][:])
+            yw_vel.append(f[f"yv_{i}"][:])
+            aw.append(f[f"a_{i}"][:])
+            i += 1
+    return Xw, yw, yw_vel, aw
+
+
 def save_fold_to_hdf5(
     file_path,
     X_train,
@@ -261,7 +283,7 @@ class IMUPreprocessor:
                 "Run download first or verify the extract_dir path."
             )
 
-        subject_data = {}
+        subject_temp_files: dict[str, str] = {}
         for subj_id, subject_zip in tqdm(subject_sources, desc="Loading subjects"):
             with zipfile.ZipFile(subject_zip, "r") as archive:
                 trial_files = sorted(
@@ -325,9 +347,12 @@ class IMUPreprocessor:
                     # stats, which removes inter-subject amplitude differences.
                     if self.normalization == "height_minmax":
                         Xw_trials = _per_subject_minmax(Xw_trials)
-                    subject_data[subj_id] = (Xw_trials, yw_trials, yw_vel_trials, aw_trials)
+                    tmp_path = os.path.join(output_dir, f"_tmp_{subj_id}.h5")
+                    _save_subject_temp(tmp_path, Xw_trials, yw_trials, yw_vel_trials, aw_trials)
+                    subject_temp_files[subj_id] = tmp_path
+                    del Xw_trials, yw_trials, yw_vel_trials, aw_trials
 
-        valid_subject_ids = list(subject_data.keys())
+        valid_subject_ids = list(subject_temp_files.keys())
         if not valid_subject_ids:
             raise RuntimeError(
                 "No valid subjects loaded. All subject ZIPs failed — "
@@ -335,65 +360,74 @@ class IMUPreprocessor:
             )
 
         logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
-        for i, test_subj in enumerate(valid_subject_ids):
-            X_test, y_test, yv_test, act_test = subject_data[test_subj]
+        try:
+            for i, test_subj in enumerate(valid_subject_ids):
+                X_test, y_test, yv_test, act_test = _load_subject_temp(subject_temp_files[test_subj])
 
-            # Test = held-out subject (LOSO). Validation = a per-subject slice of
-            # the remaining subjects' trials (val_ratio of EACH subject's trials),
-            # so val is drawn from the same distribution as train. Trial-level
-            # (not window-level) to avoid leakage between overlapping windows.
-            train_subjs = [s for s in valid_subject_ids if s != test_subj]
-            rng = random.Random(self.split_seed + i)
+                # Test = held-out subject (LOSO). Validation = a per-subject slice of
+                # the remaining subjects' trials (val_ratio of EACH subject's trials),
+                # so val is drawn from the same distribution as train. Trial-level
+                # (not window-level) to avoid leakage between overlapping windows.
+                train_subjs = [s for s in valid_subject_ids if s != test_subj]
+                rng = random.Random(self.split_seed + i)
 
-            X_train, y_train, yv_train, act_train = [], [], [], []
-            X_val, y_val, yv_val, act_val = [], [], [], []
-            for subj in train_subjs:
-                X_trials, y_trials, yv_trials, a_trials = subject_data[subj]
-                n_trials = len(X_trials)
-                n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
-                order = list(range(n_trials))
-                rng.shuffle(order)
-                val_idx = set(order[:n_val])
-                for t in range(n_trials):
-                    if t in val_idx:
-                        X_val.append(X_trials[t])
-                        y_val.append(y_trials[t])
-                        yv_val.append(yv_trials[t])
-                        act_val.append(a_trials[t])
-                    else:
-                        X_train.append(X_trials[t])
-                        y_train.append(y_trials[t])
-                        yv_train.append(yv_trials[t])
-                        act_train.append(a_trials[t])
+                X_train, y_train, yv_train, act_train = [], [], [], []
+                X_val, y_val, yv_val, act_val = [], [], [], []
+                for subj in train_subjs:
+                    X_trials, y_trials, yv_trials, a_trials = _load_subject_temp(subject_temp_files[subj])
+                    n_trials = len(X_trials)
+                    n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
+                    order = list(range(n_trials))
+                    rng.shuffle(order)
+                    val_idx = set(order[:n_val])
+                    for t in range(n_trials):
+                        if t in val_idx:
+                            X_val.append(X_trials[t])
+                            y_val.append(y_trials[t])
+                            yv_val.append(yv_trials[t])
+                            act_val.append(a_trials[t])
+                        else:
+                            X_train.append(X_trials[t])
+                            y_train.append(y_trials[t])
+                            yv_train.append(yv_trials[t])
+                            act_train.append(a_trials[t])
+                    del X_trials, y_trials, yv_trials, a_trials
 
-            logger.info(
-                f"  fold_{test_subj}: test={test_subj}, "
-                f"train_trials={len(X_train)}, val_trials={len(X_val)}, "
-                f"train_subjects={train_subjs}"
-            )
+                logger.info(
+                    f"  fold_{test_subj}: test={test_subj}, "
+                    f"train_trials={len(X_train)}, val_trials={len(X_val)}, "
+                    f"train_subjects={train_subjs}"
+                )
 
-            fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
-            os.makedirs(fold_dir, exist_ok=True)
+                fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
+                os.makedirs(fold_dir, exist_ok=True)
 
-            hdf5_path = os.path.join(fold_dir, "data.h5")
-            if os.path.exists(hdf5_path):
-                os.remove(hdf5_path)
+                hdf5_path = os.path.join(fold_dir, "data.h5")
+                if os.path.exists(hdf5_path):
+                    os.remove(hdf5_path)
 
-            save_fold_to_hdf5(
-                hdf5_path,
-                X_train,
-                y_train,
-                yv_train,
-                act_train,
-                X_val,
-                y_val,
-                yv_val,
-                act_val,
-                X_test,
-                y_test,
-                yv_test,
-                act_test,
-            )
+                save_fold_to_hdf5(
+                    hdf5_path,
+                    X_train,
+                    y_train,
+                    yv_train,
+                    act_train,
+                    X_val,
+                    y_val,
+                    yv_val,
+                    act_val,
+                    X_test,
+                    y_test,
+                    yv_test,
+                    act_test,
+                )
+                del X_train, y_train, yv_train, act_train
+                del X_val, y_val, yv_val, act_val
+                del X_test, y_test, yv_test, act_test
+        finally:
+            for tmp_path in subject_temp_files.values():
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
         logger.success(f"Successfully generated HDF5 folds in {output_dir}")
 
 

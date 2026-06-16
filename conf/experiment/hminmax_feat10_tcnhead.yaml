@@ -11,13 +11,28 @@
 version: "hminmax_feat10_tcnhead"
 
 run:
-  preprocess: true
+  preprocess: true   # set false once data/processed/.../100hz_height_feat10 exists
   pretrain: false
   train: true
   eval: true
+  # The bundled MAE checkpoint is 6-feature and incompatible with input_features=10.
+  # Train from scratch here; to use MAE init, pretrain a 10-feature checkpoint first
+  # (run.pretrain=true) and point run.checkpoint_path at it.
+  load_checkpoint: false
 
 training:
   epochs: 20
+  early_stopping:
+    # loss is in degrees² now (unnormalized target), so scale the absolute
+    # improvement threshold up from the z-scored default (1e-4).
+    min_delta: 0.05
+
+# AdamW is ~scale-invariant, so lr is left unchanged; but the grad-clip threshold
+# is in absolute gradient-norm units, which grew ~25× with the unnormalized target.
+# Disable it (or raise to ~25–50) so it doesn't clip every step.
+gpu:
+  gradient:
+    clip_grad_norm: null
 
 dataset:
   normalization: height_minmax
