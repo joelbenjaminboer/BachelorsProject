@@ -5,9 +5,9 @@ early_stopping:
   patience: 15        # stop after this many epochs without improvement
   min_delta: 1.0e-4   # minimum change to count as improvement
 batch_size: 256
-num_workers: 1
+num_workers: null   # null = auto: min(cpu_count, 8). Windows: override to 0 (shared-mem OOM)
 persistent_workers: true
-prefetch_factor: 1
+prefetch_factor: 4
 pin_memory: auto
 non_blocking_transfer: true
 holdout_subjects: ["AB194"]
