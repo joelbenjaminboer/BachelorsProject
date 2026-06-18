@@ -1,3 +1,5 @@
+import math
+
 from omegaconf import DictConfig
 import torch
 import torch.nn as nn
@@ -12,7 +14,7 @@ def build_encoder(cfg: DictConfig, seq_length: int, forecast_horizon: int) -> IM
     raw_patch_size = encoder_cfg.get("patch_size", None)
     patch_size = int(raw_patch_size) if raw_patch_size is not None else None
 
-    effective_seq_len = (seq_length // patch_size) if patch_size else seq_length
+    effective_seq_len = math.ceil(seq_length / patch_size) if patch_size else seq_length
     extra_tokens = int(encoder_cfg.positional_encoding_extra_tokens)
 
     positional_encoding_max_len = encoder_cfg.positional_encoding_max_len

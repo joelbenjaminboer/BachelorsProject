@@ -1,3 +1,4 @@
+import math
 import os
 
 from loguru import logger
@@ -213,7 +214,7 @@ class Pretrainer:
             patch_size = int(raw_patch) if raw_patch is not None else None
         self.patch_size = patch_size or 1
         self.n_channels = int(cfg.model.encoder.get("input_features", len(CHANNEL_NAMES)))
-        self.seq_length = raw_seq // patch_size if patch_size else raw_seq
+        self.seq_length = math.ceil(raw_seq / patch_size) if patch_size else raw_seq
 
         # Mask configuration: percentage-based or absolute block lengths
         self.mask_ratio = float(cfg.training.get("mask_ratio", 0.0))

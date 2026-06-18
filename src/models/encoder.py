@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -79,11 +81,14 @@ class IMU_Intent_Encoder(nn.Module):
             )
 
     def _patchify(self, x: torch.Tensor) -> torch.Tensor:
-        """[B, T, C] -> [B, T//P, P*C], dropping any tail remainder."""
+        """[B, T, C] -> [B, ceil(T/P), P*C], zero-padding if T % P != 0."""
         B, T, C = x.shape
         P = self.patch_size
-        n_patches = T // P
-        return x[:, : n_patches * P, :].reshape(B, n_patches, P * C)
+        n_patches = math.ceil(T / P)
+        pad = n_patches * P - T
+        if pad > 0:
+            x = F.pad(x, (0, 0, 0, pad))
+        return x.reshape(B, n_patches, P * C)
 
     def forward(self, x, mask=None, task="reconstruct"):
         if self.patch_size:
