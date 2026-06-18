@@ -24,10 +24,14 @@ CHANNEL_NAMES = ("Ax", "Ay", "Az", "Gy", "Gz", "Gx", "AccL2", "GyrL2", "AccM", "
 
 
 def _patchify_target(x: torch.Tensor, patch_size: int) -> torch.Tensor:
-    """[B, T, C] -> [B, T//P, P*C], matching encoder._patchify."""
+    """[B, T, C] -> [B, ceil(T/P), P*C], matching encoder._patchify (zero-pads if T % P != 0)."""
+    import torch.nn.functional as F
     B, T, C = x.shape
-    n = T // patch_size
-    return x[:, : n * patch_size, :].reshape(B, n, patch_size * C)
+    n = math.ceil(T / patch_size)
+    pad = n * patch_size - T
+    if pad > 0:
+        x = F.pad(x, (0, 0, 0, pad))
+    return x.reshape(B, n, patch_size * C)
 
 
 def masked_channel_sse(
