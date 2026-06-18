@@ -47,7 +47,10 @@ class Evaluator:
             if checkpoints_dir in seen:
                 continue
             seen.add(checkpoints_dir)
-            candidates.extend(sorted(checkpoints_dir.glob("best_model_epoch_*.pth")))
+            found = sorted(checkpoints_dir.glob("best_model_epoch_*.pth"))
+            if found:
+                candidates = found
+                break
 
         if not candidates:
             raise FileNotFoundError(

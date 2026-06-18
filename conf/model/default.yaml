@@ -2,18 +2,18 @@ model_type: encoder
 supports_pretrain: true
 
 encoder:
-  input_features: 6
+  input_features: 10
   d_model: 256
   num_heads: 4
-  num_layers: 10
+  num_layers: 5
   dim_feedforward: 1024
-  dropout: 0.27091993923871843
-  head_dropout: 0.006339032659033517
+  dropout: 0.2
+  head_dropout: 0.1
   positional_encoding_extra_tokens: 1
   positional_encoding_max_len: null
   positional_encoding_base: 10000.0
-  pooling: cls       # cls / mean / last_25
-  patch_size: 25     # null / 8 / 16 / 25
+  pooling: mean      # cls / mean / last_25
+  patch_size: null     # null / 8 / 16 / 25
   head_type: tcn  # linear / tcn
   tcn_head:
     num_blocks: 3

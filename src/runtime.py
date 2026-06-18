@@ -428,12 +428,17 @@ def load_state_into_model(model, state_dict, *, source: str = "checkpoint") -> N
     cleaned = dict(state_dict)
     cleaned.pop("positional_layer.pe", None)
     incompatible = unwrap_model(model).load_state_dict(cleaned, strict=False)
-    if incompatible.missing_keys or incompatible.unexpected_keys:
-        logger.warning(
-            "Loaded {} with missing keys: {} and unexpected keys: {}",
-            source,
-            incompatible.missing_keys,
-            incompatible.unexpected_keys,
+    # positional_layer.pe is a computed buffer intentionally excluded from the
+    # checkpoint; its absence is expected. Any other mismatch means a wrong
+    # checkpoint was loaded — raise rather than silently train on random weights.
+    _EXPECTED_MISSING = {"positional_layer.pe"}
+    unexpected = incompatible.unexpected_keys
+    missing = [k for k in incompatible.missing_keys if k not in _EXPECTED_MISSING]
+    if unexpected or missing:
+        raise RuntimeError(
+            f"Checkpoint '{source}' does not match the current model architecture.\n"
+            f"  Unexpected keys (in checkpoint, not in model): {unexpected}\n"
+            f"  Missing keys (in model, not in checkpoint):    {missing}\n"
+            "Load the correct checkpoint or regenerate it with the current config."
         )
-    else:
-        logger.info(f"Loaded {source} weights into model")
+    logger.info(f"Loaded {source} weights into model")

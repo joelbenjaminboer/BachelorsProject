@@ -148,6 +148,7 @@ class Trainer:
         scale = float(self.y_std) if self.y_std is not None else 1.0
         total_loss = torch.zeros((), device=self.device)
         sq_err = torch.zeros((), device=self.device)
+        loss_count = 0
         count = 0
         loader = self.ctx.val_loader
 
@@ -162,13 +163,14 @@ class Trainer:
                 with autocast_context(self.autocast_kwargs):
                     output = self.model(past_imu, task="predict")
                 angle_pred = (output[0] if isinstance(output, tuple) else output).float()
-                total_loss += self.criterion(angle_pred, future_knee).detach()
+                n_pred = future_knee.numel()
+                total_loss += self.criterion(angle_pred, future_knee).detach() * n_pred
+                loss_count += n_pred
                 diff = angle_pred - future_knee
                 sq_err += torch.sum(diff * diff)
                 count += diff.numel()
 
-        n = max(1, len(loader))
-        val_loss = (total_loss / n).item()
+        val_loss = (total_loss / max(1, loss_count)).item()
         val_rmse = scale * (sq_err / max(1, count)).sqrt().item()
         return val_loss, val_rmse
 
@@ -182,6 +184,8 @@ class Trainer:
             f"best_model_epoch_{epoch + 1}.pth",
         )
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+        if self.best_checkpoint_path and os.path.exists(self.best_checkpoint_path):
+            os.remove(self.best_checkpoint_path)
         torch.save(unwrap_model(self.model).state_dict(), checkpoint_path)
         logger.info(f"Saved new best model checkpoint to {checkpoint_path}")
         self.best_checkpoint_path = checkpoint_path
