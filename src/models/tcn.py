@@ -20,7 +20,7 @@ class _TCNBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int, dilation: int, dropout: float = 0.3):
         super().__init__()
         self.conv = _CausalConv1d(in_channels, out_channels, kernel_size, dilation)
-        self.norm = nn.LayerNorm(out_channels)
+        self.norm = nn.BatchNorm1d(out_channels)
         self.act = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.residual = (
@@ -30,7 +30,7 @@ class _TCNBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, C, T)
         out = self.conv(x)
-        out = self.norm(out.transpose(1, 2)).transpose(1, 2)
+        out = self.norm(out)
         out = self.act(out)
         out = self.dropout(out)
         return self.act(out + self.residual(x))
