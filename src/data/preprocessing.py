@@ -145,6 +145,10 @@ class IMUPreprocessor:
         handcrafted_features: bool = False,
         val_ratio: float = 0.1,
         split_seed: int = 42,
+        split_strategy: str = "loso",
+        per_subject_train_ratio: float = 0.7,
+        per_subject_val_ratio: float = 0.1,
+        per_subject_test_ratio: float = 0.2,
     ):
         self.root_dir = root_dir
         self.window_size = window_size
@@ -161,6 +165,10 @@ class IMUPreprocessor:
         self.handcrafted_features = handcrafted_features
         self.val_ratio = val_ratio
         self.split_seed = split_seed
+        self.split_strategy = split_strategy
+        self.per_subject_train_ratio = per_subject_train_ratio
+        self.per_subject_val_ratio = per_subject_val_ratio
+        self.per_subject_test_ratio = per_subject_test_ratio
         self.leg_configs = {
             "right": {
                 "predictors": [
@@ -384,76 +392,149 @@ class IMUPreprocessor:
                 "check the data format and column names."
             )
 
-        logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
         try:
-            for i, test_subj in enumerate(valid_subject_ids):
-                train_subjs = [s for s in valid_subject_ids if s != test_subj]
-                rng = random.Random(self.split_seed + i)
-
-                fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
-                os.makedirs(fold_dir, exist_ok=True)
-                hdf5_path = os.path.join(fold_dir, "data.h5")
-                if os.path.exists(hdf5_path):
-                    os.remove(hdf5_path)
-
-                train_count = val_count = 0
-                with h5py.File(hdf5_path, "w") as hfold:
-                    train_grp = hfold.create_group("train")
-                    val_grp = hfold.create_group("val")
-                    test_grp = hfold.create_group("test")
-
-                    # Write test subject directly — one subject in RAM at a time.
-                    X_test, y_test, yv_test, act_test = _load_subject_temp(
-                        subject_temp_files[test_subj]
-                    )
-                    for t, (x, y, yv, a) in enumerate(
-                        zip(X_test, y_test, yv_test, act_test)
-                    ):
-                        test_grp.create_dataset(f"X_{t}", data=x, compression="gzip")
-                        test_grp.create_dataset(f"y_{t}", data=y, compression="gzip")
-                        test_grp.create_dataset(f"yv_{t}", data=yv, compression="gzip")
-                        test_grp.create_dataset(f"a_{t}", data=a, compression="gzip")
-                    del X_test, y_test, yv_test, act_test
-
-                    # Write each train subject immediately; never accumulate across subjects.
-                    # Test = held-out subject (LOSO). Validation = a per-subject slice of
-                    # the remaining subjects' trials (val_ratio of EACH subject's trials),
-                    # so val is drawn from the same distribution as train. Trial-level
-                    # (not window-level) to avoid leakage between overlapping windows.
-                    for subj in train_subjs:
-                        X_trials, y_trials, yv_trials, a_trials = _load_subject_temp(
-                            subject_temp_files[subj]
-                        )
-                        n_trials = len(X_trials)
-                        n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
-                        order = list(range(n_trials))
-                        rng.shuffle(order)
-                        val_idx = set(order[:n_val])
-                        for t in range(n_trials):
-                            if t in val_idx:
-                                val_grp.create_dataset(f"X_{val_count}", data=X_trials[t], compression="gzip")
-                                val_grp.create_dataset(f"y_{val_count}", data=y_trials[t], compression="gzip")
-                                val_grp.create_dataset(f"yv_{val_count}", data=yv_trials[t], compression="gzip")
-                                val_grp.create_dataset(f"a_{val_count}", data=a_trials[t], compression="gzip")
-                                val_count += 1
-                            else:
-                                train_grp.create_dataset(f"X_{train_count}", data=X_trials[t], compression="gzip")
-                                train_grp.create_dataset(f"y_{train_count}", data=y_trials[t], compression="gzip")
-                                train_grp.create_dataset(f"yv_{train_count}", data=yv_trials[t], compression="gzip")
-                                train_grp.create_dataset(f"a_{train_count}", data=a_trials[t], compression="gzip")
-                                train_count += 1
-                        del X_trials, y_trials, yv_trials, a_trials
-
-                logger.info(
-                    f"  fold_{test_subj}: test={test_subj}, "
-                    f"train_trials={train_count}, val_trials={val_count}, "
-                    f"train_subjects={train_subjs}"
-                )
+            if self.split_strategy == "per_subject":
+                self._build_per_subject_fold(output_dir, subject_temp_files, valid_subject_ids)
+            else:
+                self._build_loso_folds(output_dir, subject_temp_files, valid_subject_ids)
         finally:
             for tmp_path in subject_temp_files.values():
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
         logger.success(f"Successfully generated HDF5 folds in {output_dir}")
+
+    def _build_per_subject_fold(self, output_dir, subject_temp_files, valid_subject_ids):
+        """Pool every subject's own trials into one fold, splitting each subject's
+        trials (not windows, to avoid leakage between overlapping windows) into
+        train/val/test by the configured ratios."""
+        fold_dir = os.path.join(output_dir, "fold_persubject")
+        os.makedirs(fold_dir, exist_ok=True)
+        hdf5_path = os.path.join(fold_dir, "data.h5")
+        if os.path.exists(hdf5_path):
+            os.remove(hdf5_path)
+
+        train_r = self.per_subject_train_ratio
+        val_r = self.per_subject_val_ratio
+        test_r = self.per_subject_test_ratio
+        logger.info(
+            "Creating per-subject fold ({} subjects), ratios train={:.2f} val={:.2f} test={:.2f}...",
+            len(valid_subject_ids),
+            train_r,
+            val_r,
+            test_r,
+        )
+
+        counts = {"train": 0, "val": 0, "test": 0}
+        with h5py.File(hdf5_path, "w") as hfold:
+            groups = {name: hfold.create_group(name) for name in ("train", "val", "test")}
+
+            for i, subj in enumerate(valid_subject_ids):
+                X_trials, y_trials, yv_trials, a_trials = _load_subject_temp(
+                    subject_temp_files[subj]
+                )
+                n_trials = len(X_trials)
+                rng = random.Random(self.split_seed + i)
+                order = list(range(n_trials))
+                rng.shuffle(order)
+
+                if n_trials <= 1:
+                    n_test = n_val = 0
+                else:
+                    n_test = max(1, round(test_r * n_trials)) if test_r > 0 else 0
+                    n_val = max(1, round(val_r * n_trials)) if val_r > 0 else 0
+                    # Always leave at least one trial for train.
+                    while n_test + n_val >= n_trials and (n_val > 0 or n_test > 0):
+                        if n_val > 0:
+                            n_val -= 1
+                        else:
+                            n_test -= 1
+
+                test_idx = set(order[:n_test])
+                val_idx = set(order[n_test : n_test + n_val])
+
+                for t in range(n_trials):
+                    name = "test" if t in test_idx else "val" if t in val_idx else "train"
+                    grp = groups[name]
+                    idx = counts[name]
+                    grp.create_dataset(f"X_{idx}", data=X_trials[t], compression="gzip")
+                    grp.create_dataset(f"y_{idx}", data=y_trials[t], compression="gzip")
+                    grp.create_dataset(f"yv_{idx}", data=yv_trials[t], compression="gzip")
+                    grp.create_dataset(f"a_{idx}", data=a_trials[t], compression="gzip")
+                    counts[name] += 1
+                del X_trials, y_trials, yv_trials, a_trials
+
+        logger.info(
+            "  fold_persubject: train_trials={}, val_trials={}, test_trials={}",
+            counts["train"],
+            counts["val"],
+            counts["test"],
+        )
+
+    def _build_loso_folds(self, output_dir, subject_temp_files, valid_subject_ids):
+        logger.info(f"Creating LOSO folds for {len(valid_subject_ids)} subjects...")
+        for i, test_subj in enumerate(valid_subject_ids):
+            train_subjs = [s for s in valid_subject_ids if s != test_subj]
+            rng = random.Random(self.split_seed + i)
+
+            fold_dir = os.path.join(output_dir, f"fold_{test_subj}")
+            os.makedirs(fold_dir, exist_ok=True)
+            hdf5_path = os.path.join(fold_dir, "data.h5")
+            if os.path.exists(hdf5_path):
+                os.remove(hdf5_path)
+
+            train_count = val_count = 0
+            with h5py.File(hdf5_path, "w") as hfold:
+                train_grp = hfold.create_group("train")
+                val_grp = hfold.create_group("val")
+                test_grp = hfold.create_group("test")
+
+                # Write test subject directly — one subject in RAM at a time.
+                X_test, y_test, yv_test, act_test = _load_subject_temp(
+                    subject_temp_files[test_subj]
+                )
+                for t, (x, y, yv, a) in enumerate(
+                    zip(X_test, y_test, yv_test, act_test)
+                ):
+                    test_grp.create_dataset(f"X_{t}", data=x, compression="gzip")
+                    test_grp.create_dataset(f"y_{t}", data=y, compression="gzip")
+                    test_grp.create_dataset(f"yv_{t}", data=yv, compression="gzip")
+                    test_grp.create_dataset(f"a_{t}", data=a, compression="gzip")
+                del X_test, y_test, yv_test, act_test
+
+                # Write each train subject immediately; never accumulate across subjects.
+                # Test = held-out subject (LOSO). Validation = a per-subject slice of
+                # the remaining subjects' trials (val_ratio of EACH subject's trials),
+                # so val is drawn from the same distribution as train. Trial-level
+                # (not window-level) to avoid leakage between overlapping windows.
+                for subj in train_subjs:
+                    X_trials, y_trials, yv_trials, a_trials = _load_subject_temp(
+                        subject_temp_files[subj]
+                    )
+                    n_trials = len(X_trials)
+                    n_val = max(1, round(self.val_ratio * n_trials)) if n_trials > 1 else 0
+                    order = list(range(n_trials))
+                    rng.shuffle(order)
+                    val_idx = set(order[:n_val])
+                    for t in range(n_trials):
+                        if t in val_idx:
+                            val_grp.create_dataset(f"X_{val_count}", data=X_trials[t], compression="gzip")
+                            val_grp.create_dataset(f"y_{val_count}", data=y_trials[t], compression="gzip")
+                            val_grp.create_dataset(f"yv_{val_count}", data=yv_trials[t], compression="gzip")
+                            val_grp.create_dataset(f"a_{val_count}", data=a_trials[t], compression="gzip")
+                            val_count += 1
+                        else:
+                            train_grp.create_dataset(f"X_{train_count}", data=X_trials[t], compression="gzip")
+                            train_grp.create_dataset(f"y_{train_count}", data=y_trials[t], compression="gzip")
+                            train_grp.create_dataset(f"yv_{train_count}", data=yv_trials[t], compression="gzip")
+                            train_grp.create_dataset(f"a_{train_count}", data=a_trials[t], compression="gzip")
+                            train_count += 1
+                    del X_trials, y_trials, yv_trials, a_trials
+
+            logger.info(
+                f"  fold_{test_subj}: test={test_subj}, "
+                f"train_trials={train_count}, val_trials={val_count}, "
+                f"train_subjects={train_subjs}"
+            )
 
 
 def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
@@ -478,11 +559,18 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
     split_seed = int(cfg.training.get("split_seed", 42))
     val_ratio = 1.0 - float(cfg.training.get("split_ratio", 0.9))
 
+    split_strategy = str(cfg.dataset.get("split_strategy", "loso")).lower()
+    per_subject_train_ratio = float(cfg.training.get("per_subject_train_ratio", 0.7))
+    per_subject_val_ratio = float(cfg.training.get("per_subject_val_ratio", 0.1))
+    per_subject_test_ratio = float(cfg.training.get("per_subject_test_ratio", 0.2))
+
     logger.info(
-        "Preprocessing: anti_alias={}, normalization={}, handcrafted_features={}, val_ratio={:.2f}",
+        "Preprocessing: anti_alias={}, normalization={}, handcrafted_features={}, "
+        "split_strategy={}, val_ratio={:.2f}",
         anti_alias,
         normalization,
         handcrafted_features,
+        split_strategy,
         val_ratio,
     )
     if normalization == "height_minmax":
@@ -503,6 +591,10 @@ def run_preprocessing(cfg: DictConfig, version: str = "0.1.0"):
         handcrafted_features=handcrafted_features,
         val_ratio=val_ratio,
         split_seed=split_seed,
+        split_strategy=split_strategy,
+        per_subject_train_ratio=per_subject_train_ratio,
+        per_subject_val_ratio=per_subject_val_ratio,
+        per_subject_test_ratio=per_subject_test_ratio,
     )
     preprocessor.run(processed_dir)
 

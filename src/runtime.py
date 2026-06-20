@@ -17,12 +17,17 @@ def _gpu_cfg(cfg: DictConfig):
 
 
 def fold_subdir(cfg: DictConfig) -> str:
-    """Per-fold checkpoint subfolder name, keyed by the LOSO holdout subject(s).
+    """Per-fold checkpoint subfolder name.
 
-    Returns e.g. ``"fold_AB156"`` so concurrent/sequential LOSO folds each save to
-    their own directory instead of overwriting a single shared ``best_model_*``.
-    Returns ``""`` when no holdout is set (harmless as an ``os.path.join`` segment).
+    For ``dataset.split_strategy=per_subject`` there is a single pooled fold, so
+    this returns the fixed ``"fold_persubject"``. Otherwise it's keyed by the LOSO
+    holdout subject(s), e.g. ``"fold_AB156"``, so concurrent/sequential LOSO folds
+    each save to their own directory instead of overwriting a single shared
+    ``best_model_*``. Returns ``""`` when no holdout is set (harmless as an
+    ``os.path.join`` segment).
     """
+    if str(cfg.get("dataset", {}).get("split_strategy", "loso")).lower() == "per_subject":
+        return "fold_persubject"
     holdouts = list(cfg.get("training", {}).get("holdout_subjects", []) or [])
     if not holdouts:
         return ""
@@ -311,14 +316,20 @@ def build_run_context(
         cfg, device, pin_memory=loader_kwargs.get("pin_memory", False)
     )
 
-    holdout_subjects = cfg.training.get("holdout_subjects", [])
-    if not holdout_subjects:
-        raise ValueError("training.holdout_subjects must contain at least one subject")
-    holdout = holdout_subjects[0]
-
-    fold_dir = os.path.join(
-        hydra.utils.to_absolute_path(cfg.dataset.processed_dir), f"fold_{holdout}"
-    )
+    split_strategy = str(cfg.dataset.get("split_strategy", "loso")).lower()
+    if split_strategy == "per_subject":
+        holdout = "persubject"
+        fold_dir = os.path.join(
+            hydra.utils.to_absolute_path(cfg.dataset.processed_dir), "fold_persubject"
+        )
+    else:
+        holdout_subjects = cfg.training.get("holdout_subjects", [])
+        if not holdout_subjects:
+            raise ValueError("training.holdout_subjects must contain at least one subject")
+        holdout = holdout_subjects[0]
+        fold_dir = os.path.join(
+            hydra.utils.to_absolute_path(cfg.dataset.processed_dir), f"fold_{holdout}"
+        )
 
     aug_cfg = dict(cfg.training.get("augmentation", {})) or None
     multitask_enabled = bool(cfg.model.get("multitask", {}).get("enabled", False))

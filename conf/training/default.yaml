@@ -12,6 +12,12 @@ pin_memory: auto
 non_blocking_transfer: true
 holdout_subjects: ["AB194"]
 split_seed: 42
+
+# Used only when dataset.split_strategy=per_subject: each subject's trials are
+# shuffled (split_seed) and cut trial-wise into these fractions.
+per_subject_train_ratio: 0.7
+per_subject_val_ratio: 0.1
+per_subject_test_ratio: 0.2
 context_length: 274
 forecast_horizon: 137
 

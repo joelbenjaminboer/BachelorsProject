@@ -23,3 +23,9 @@ normalize_target: false
 # Gyro_M) → 10 input features instead of 6. Requires input_features=10 in the
 # model config and re-running preprocessing.
 handcrafted_features: false
+
+# How trials are split into train/val/test:
+# "loso" — one fold per held-out subject (test = held-out subject, train/val =
+#   the rest); "per_subject" — every subject's own trials are split
+#   70/10/20 (see training.per_subject_*_ratio) and pooled into one fold.
+split_strategy: loso
