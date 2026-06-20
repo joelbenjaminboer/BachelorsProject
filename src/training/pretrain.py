@@ -132,12 +132,12 @@ def evaluate_masked_reconstruction(
     n_channels: int = len(CHANNEL_NAMES),
 ):
     if data_loader is None or len(data_loader) == 0:
-        nan_metrics = torch.full((len(CHANNEL_NAMES),), float("nan"))
+        nan_metrics = torch.full((n_channels,), float("nan"))
         return float("nan"), nan_metrics, nan_metrics
 
     model.eval()
     phase_loss = torch.zeros((), device=device)
-    phase_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=device)
+    phase_sq_error_sum = torch.zeros(n_channels, device=device)
     phase_masked_count = torch.zeros((), device=device)
 
     with torch.inference_mode():
@@ -182,8 +182,8 @@ def evaluate_masked_reconstruction(
         phase_channel_mse = (phase_sq_error_sum / phase_masked_count_val).detach().cpu()
         phase_channel_rmse = torch.sqrt(phase_channel_mse)
     else:
-        phase_channel_mse = torch.full((len(CHANNEL_NAMES),), float("nan"))
-        phase_channel_rmse = torch.full((len(CHANNEL_NAMES),), float("nan"))
+        phase_channel_mse = torch.full((n_channels,), float("nan"))
+        phase_channel_rmse = torch.full((n_channels,), float("nan"))
 
     return phase_loss, phase_channel_mse, phase_channel_rmse
 
@@ -286,7 +286,7 @@ class Pretrainer:
         for epoch in range(self.epochs):
             self.model.train()
             train_loss = torch.zeros((), device=self.device)
-            train_sq_error_sum = torch.zeros(len(CHANNEL_NAMES), device=self.device)
+            train_sq_error_sum = torch.zeros(self.n_channels, device=self.device)
             train_masked_count = torch.zeros((), device=self.device)
             self.optimizer.zero_grad(set_to_none=True)
 
@@ -349,8 +349,8 @@ class Pretrainer:
                 train_channel_mse = (train_sq_error_sum / train_masked_count_val).detach().cpu()
                 train_channel_rmse = torch.sqrt(train_channel_mse)
             else:
-                train_channel_mse = torch.full((len(CHANNEL_NAMES),), float("nan"))
-                train_channel_rmse = torch.full((len(CHANNEL_NAMES),), float("nan"))
+                train_channel_mse = torch.full((self.n_channels,), float("nan"))
+                train_channel_rmse = torch.full((self.n_channels,), float("nan"))
 
             val_loss, val_channel_mse, val_channel_rmse = evaluate_masked_reconstruction(
                 model=self.model,
