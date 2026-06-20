@@ -414,7 +414,7 @@ class Pretrainer:
             if should_save_intermediate_epoch(self.cfg, epoch):
                 save_pretrain_artifacts(
                     cfg=self.cfg,
-                    channel_names=CHANNEL_NAMES,
+                    channel_names=CHANNEL_NAMES[: self.n_channels],
                     train_losses=train_loss_history,
                     val_losses=val_loss_history,
                     train_channel_mse=train_channel_mse_history,
@@ -440,7 +440,7 @@ class Pretrainer:
 
         save_pretrain_artifacts(
             cfg=self.cfg,
-            channel_names=CHANNEL_NAMES,
+            channel_names=CHANNEL_NAMES[: self.n_channels],
             train_losses=train_loss_history,
             val_losses=val_loss_history,
             train_channel_mse=train_channel_mse_history,
