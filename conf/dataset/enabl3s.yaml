@@ -2,7 +2,7 @@ url: "https://figshare.com/ndownloader/articles/5362627/versions/3"
 raw_data_dir: "data/raw"
 output_zip: "data/raw/ENABL3S.zip"
 extract_dir: "data/raw/ENABL3S"
-processed_dir: "data/processed/ENABL3S/100hz_height"
+processed_dir: "data/processed/ENABL3S/100hz_height_feat10"
 original_freq: 500
 target_freq: 100
 use_both_legs: true

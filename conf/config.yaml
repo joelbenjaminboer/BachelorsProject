@@ -9,4 +9,4 @@ defaults:
   - override hydra/job_logging: loguru
   - _self_
 
-version: "allfolds_100hz"
+version: "Model_nopatch"

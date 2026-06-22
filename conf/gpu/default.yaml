@@ -12,7 +12,7 @@ autocast:
   init_scale: 1024
 
 compile:
-  enabled: false
+  enabled: true
   mode: reduce-overhead
   fullgraph: false
   dynamic: false

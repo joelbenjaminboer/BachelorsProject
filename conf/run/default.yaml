@@ -1,7 +1,7 @@
 download: false
 preprocess: false
 hparam_search: false
-pretrain: true
+pretrain: false
 train: true
 eval: true
 
@@ -9,4 +9,4 @@ all_folds: false
 all_folds_workers: 1
 
 load_checkpoint: true
-checkpoint_path: "checkpoints/pretrain/allfolds_100hz/best_pretrained_epoch_9.pth"
+checkpoint_path: "checkpoints/pretrain/Model_nopatch/fold_AB156/best_pretrained_epoch_4.pth"
