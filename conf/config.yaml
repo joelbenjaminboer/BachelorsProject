@@ -6,6 +6,7 @@ defaults:
   - gpu: default
   - plotting: default
   - hparam_search: default
+  - benchmark: default
   - override hydra/job_logging: loguru
   - _self_
 

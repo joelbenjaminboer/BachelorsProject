@@ -1,0 +1,161 @@
+\section{Introduction}\label{sec:introduction}
+
+Limb amputation is a life-altering medical event. Globally, over one million amputations are performed each year \citep{wen2023globaltamputation}, with the majority attributable to vascular disease, diabetes, cancer, and trauma. Beyond the physical loss, approximately 30\% of amputees experience significant psychological consequences, including anxiety, depression, and post-traumatic stress disorder \citep{rojeDapic2021psychological}. Together, these effects impose a profound lifestyle change, diminishing independence, social participation, and overall quality of life.
+Prosthetic limbs offer a path toward restoring mobility and autonomy. Among available options, active lower-limb prostheses are preferred over passive or semi-passive alternatives, as they provide assistive power during demanding movements such as stair climbing, slope negotiation, and rising from a seated position \citep{bhakta2023control}. The effectiveness of such devices, however, depends on their ability to anticipate and adapt to the user's movement in real time. Central to this is the accurate prediction of knee joint angles throughout the gait cycle, which enables the prosthetic controller to respond proactively rather than reactively.
+Deep learning approaches have shown promise in laboratory settings, yet their applicability to real-world prosthetic control remains an open research question. A key determinant of model performance is the richness of the sensor data available. Prior work has employed a variety of sensors, including Inertial Measurement Units (IMUs), surface electromyography (sEMG), force myography (FMG), and goniometers (GONIO). In this work, we focus on a single IMU placed non-invasively on the lower thigh, a configuration that minimises the burden on the user. Previous studies have evaluated networks such as TimesNet \citep{PLACEHOLDER}, TCN \citep{PLACEHOLDER}, a CNN-BiLSTM augmented with ReliefF-MI feature selection \citep{PLACEHOLDER}, and LSTM-based models; however, none of these architectures is well-suited to capturing the long-range temporal dependencies that characterise locomotion-mode transitions, which remain particularly difficult to detect from a single sensor stream. These considerations motivate the adoption of the Transformer architecture. Through multi-head self-attention, Transformers can relate any two positions in a sequence regardless of their temporal distance, a property that makes them especially attractive for modelling the gradual, context-dependent shifts between locomotion modes. Despite this growing body of work, Transformer architectures have seen limited application in the specific context of prosthetic knee angle prediction.
+Concretely, this study makes the following contributions:
+\begin{itemize}
+\item A Transformer architecture is evaluated for continuous knee angle prediction and compared against alternative deep learning models.
+\item Unlike prior work that relies on multi-sensor setups, this study evaluates whether significant prediction accuracy can be achieved uses a single IMU sensor.
+\end{itemize}
+
+\subsection{Related work}
+%%Revised down
+Several studies have probed how far the sensor count can be reduced while maintaining viable prediction performance. \citet{wangEnhancingLocomotionModeRecognition2025} fuse IMU and force myography (FMG) signals through a CNN-BiLSTM architecture, demonstrating the gains available from complementary modalities. \citet{wangGaitSeamlessKnee2025} approached the problem with an Angle Estimation Probabilistic Model (AEPM) fed by fifteen body IMUs in combination with a Transformer network, demonstrating the impact of whole-body kinematics on lower-limb dynamics and achieving an RMSE of 6.83° overall and 2.93° in level walking. \citet{shahGaitSpeedTask2025} reduced sensor count to seven IMUs and applied an LSTM autoencoder to predict hip, knee, and ankle sagittal-plane kinematics across walking, jogging, and running, reaching an RMSE below 6°. An early answer at the minimal end was provided by \citet{sung2021prediction}, who used a single low-frequency IMU paired with an LSTM to estimate hip, knee, and ankle angles during overground walking, achieving R² above 0.74 and RMSE below 7°, with the knee outperforming the other joints. \citet{thudor2025knee} pushes this further, using a single IMU alongside a goniometer target signal and a TCN-LSTM architecture to achieve an MAE of 1.19° with an average inference time of 3.7~ms. More recently, \citet{huang2026multi} combined a Temporal Convolutional Network with a Multi-Head Attention mechanism (TCN-MHA) to predict knee joint angles from IMU data across six walking patterns, achieving an RMSE of 5.77° and R² of 0.889 evidence that attention-augmented architectures are beginning to supplant pure recurrent or convolutional baselines for this task.
+
+
+
+%%old
+\subsection{OLD}
+A wide variety of machine learning architectures have been explored for biomedical signal prediction, utilizing different sensor modalities and model designs. These range from high-density surface electromyography (sEMG) \citep{10752377} to hybrid approaches combining inertial measurement units (IMU) and force myography (FMG) signals processed through CNN-BiLSTM architectures \citep{wangEnhancingLocomotionModeRecognition2025}. Predicting based on a single IMU sensor is still a challenge in predicting knee angles. \citet{wangGaitSeamlessKnee2025} used fifteen body joints in combination with a transformer network for predicting locomotion in the lower limb, demonstrating the impact of whole-body movement on lower limb dynamics. The paper proposes an Angle Estimation Probabilistic Model (AEPM), which achieved an overall RMSE of 6.83 degrees with an RMSE of 2.93 degrees in walking scenarios. While the 15-joint input performs best, the paper recommends an 8-joint configuration due to its lower data requirements while maintaining comparable accuracy. \citet{shahGaitSpeedTask2025} developed an LSTM autoencoder model using IMU data from seven sensors to predict hip, knee, and ankle sagittal plane kinematics across walking, jogging, and running, achieving an RMSE below 6 degrees across all joints, further reduced to below 2 degrees when applying dynamic time warping post-processing. \citet{thudor2025knee} used a single IMU sensor together with a goniometer (GONIO) as an input and target feature, employing a TCN and LSTM architecture for continuous prediction of the ankle joint angle, yielding an MAE of 1.19 degrees with an average inference time of 3.7~ms. This demonstrates that a minimal sensor configuration is viable compared to the 15-joint setup of \citet{wangGaitSeamlessKnee2025}.
+
+Beyond continuous joint angle regression, a large body of work addresses the discrete classification of locomotion modes and the estimation of gait phase, both of which are prerequisites for intelligent prosthetic and exoskeleton control. \citet{xuNoninvasiveHumanProsthesisInterfaces2021} provide a comprehensive review of noninvasive intent recognition methods for lower-limb prostheses, identifying locomotion mode recognition, gait event detection, and continuous gait phase estimation as the three central tasks. \citet{weigandContinuousLocomotionMode2022} showed that a single shank-mounted IMU, combined with a neural network that incorporates temporal history, can simultaneously estimate gait phase (MAE 2.0--3.5\%), classify locomotion mode (accuracy 98.5--99.7\%), and estimate stair slope (MAE 3.3--3.8°). This is notable because it achieves multi-task performance using a single, minimally obtrusive sensor.
+
+Classifying discrete locomotion modes has received attention since it simplifies the prediction problem at hand. \citet{suCNNBasedMethodIntent2019} applied a CNN to IMU data from the contralateral healthy leg of transfemoral amputees, achieving 94.15\% recognition accuracy across 13 motion intent classes including steady states and transitional gaits. \citet{fengSmallDataDrivenTemporalConvolutional2022} introduced a Temporal Convolutional Capsule Network (TCCN) that outperforms standard CNNs and RNNs on locomotion mode recognition when data is limited, by combining dilated convolutions with capsule-based vector routing. \citet{carvalhoLocomotionModePrediction2025} proposed an LSTM model that predicts five locomotion modes up to 0.66~s in advance using inertial sensors from the lower limbs and back, achieving 98\% accuracy in real-life walking scenarios with and without exoskeleton assistance.
+ 
+% Colour definitions
+\definecolor{groupbg}{gray}{0.88}
+\definecolor{rowalt}{gray}{0.96}
+
+\onecolumn
+\begin{longtable}{@{}>{\footnotesize}p{2.6cm}
+                     >{\footnotesize\centering}p{0.6cm}
+                     >{\footnotesize}p{2.4cm}
+                     >{\footnotesize}p{2.8cm}
+                     >{\footnotesize}p{2.6cm}
+                     >{\footnotesize}p{2.8cm}@{}}
+ 
+\caption{Table of related works and their findings}
+\label{tab:related_works} \\
+ 
+\toprule
+\textbf{Reference} & \textbf{Year} & \textbf{Sensor(s)} & \textbf{Architecture} & \textbf{Task} & \textbf{Performance} \\
+\midrule
+\endfirsthead
+\multicolumn{6}{c}{\footnotesize\tablename~\thetable{} \textit{-- continued}} \\[2pt]
+\toprule
+\textbf{Reference} & \textbf{Year} & \textbf{Sensor(s)} & \textbf{Architecture} & \textbf{Task} & \textbf{Performance} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+ 
+% ── GROUP 1 ────────────────────────────────────────────────────
+\rowcolor{groupbg}
+\multicolumn{6}{l}{\textbf{Joint Kinematics \& Angle Prediction}} \\
+\midrule
+ 
+\citet{wangGaitSeamlessKnee2025} & 2025 &
+    15 body joints (IMU) &
+    Transformer (AEPM) &
+    Knee angle prediction &
+    RMSE 2.93° (walk); 6.83° overall \\
+\addlinespace[2pt]
+ 
+\rowcolor{rowalt}
+\citet{shahGaitSpeedTask2025} & 2025 &
+    7 IMUs (per joint: proximal + distal) &
+    LSTM autoencoder &
+    Hip, knee \& ankle kinematics (walk/jog/run) &
+    RMSE $<$6°; $<$2° with DTW \\
+\addlinespace[2pt]
+ 
+\citet{thudor2025knee} & 2025 &
+    Single IMU + goniometer &
+    TCN/LSTM &
+    Continuous knee angle prediction &
+    MAE 1.19°; 3.7~ms inference \\
+\addlinespace[2pt]
+ 
+\rowcolor{rowalt}
+\citet{wangEnhancingLocomotionModeRecognition2025} & 2025 &
+    IMU + FMG (dual-modal) &
+    CNN-BiLSTM &
+    5 locomotion modes + 8 transitions &
+    98.51\% accuracy; 274~ms ahead \\
+ 
+\midrule
+ 
+% ── GROUP 2 ────────────────────────────────────────────────────
+\rowcolor{groupbg}
+\multicolumn{6}{l}{\textbf{Gait Analysis with Wearable IMUs}} \\
+\midrule
+ 
+\citet{weigandContinuousLocomotionMode2022} & 2022 &
+    Single shank-mounted IMU &
+    ANN with temporal history &
+    Gait phase + locomotion mode + stair slope (simultaneous) &
+    Phase MAE 2.0--3.5\%; mode acc.\ 98.5--99.7\% \\
+\addlinespace[2pt]
+ 
+\rowcolor{rowalt}
+\citet{romijndersDeepLearningApproach2022} & 2022 &
+    Single IMU (ankle or shank) &
+    Dilated CNN &
+    Gait event detection (healthy + neurological) &
+    Recall $\geq$92\%; precision $\geq$97\% \\
+\addlinespace[2pt]
+ 
+\citet{vittoriaguerraAIProcessingWearable2024} & 2024 &
+    IMU (hip, knee, ankle) &
+    1D-CNN + BiLSTM &
+    Stance/swing phase (exoskeleton-assisted) &
+    98.64\% accuracy; 57~ms latency \\
+\addlinespace[2pt]
+ 
+\rowcolor{rowalt}
+\citet{carvalhoLocomotionModePrediction2025} & 2025 &
+    IMU (lower limbs + back) + laser &
+    LSTM &
+    5 locomotion modes, real-life walking &
+    98$\pm$0.31\%; 0.66~s lead time \\
+ 
+\midrule
+ 
+% ── GROUP 3 ────────────────────────────────────────────────────
+\rowcolor{groupbg}
+\multicolumn{6}{l}{\textbf{Foundation Models \& Text Embeddings for Time Series}} \\
+\midrule
+ 
+\citet{sutskeverSequenceSequenceLearning2014} & 2014 &
+    — &
+    LSTM (Seq2Seq) &
+    Sequence-to-sequence learning &
+    BLEU 34.8 (EN$\to$FR) \\
+\addlinespace[2pt]
+ 
+\rowcolor{rowalt}
+\citet{wolffUsingPretrainedLLMs2025} & 2025 &
+    — &
+    Pre-trained LLM + multivariate patching &
+    Multivariate time series forecasting &
+    Competitive with dedicated SOTA \\
+\addlinespace[2pt]
+ 
+\citet{kaurLETSCLeveragingText2025} & 2025 &
+    — &
+    Text embedding + CNN-MLP (LETS-C) &
+    Time series classification &
+    Surpasses SOTA; 14.5\% of LLM parameters \\
+\addlinespace[2pt]
+ 
+\rowcolor{rowalt}
+\citet{zhaoSurveyTransformerNetworks2026} & 2026 &
+    — &
+    Survey &
+    Transformer-based time series (2020--2025) &
+    — \\
+ 
+\end{longtable}
+\twocolumn
+

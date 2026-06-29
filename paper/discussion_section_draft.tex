@@ -1,0 +1,158 @@
+% === thesis-writer: Discussion section (skeleton with placeholders) ===
+% NOTE: Cross-references assume the Results section lives in results_section_draft.tex
+% with labels tab:main_results, tab:split_strategy, fig:rmse_over_horizon,
+% fig:qualitative_examples (see that file). Update labels here if they differ.
+
+\section{Discussion}\label{sec:Discussion}
+
+% TODO: confirm whether this thesis has a separate Limitations section/chapter.
+% If yes, move the closing paragraph of \ref{sec:disc-limitations-note} there
+% and drop the heading below to \subsection{Limitations and Future Work} only
+% if no separate section exists.
+
+\subsection{Generalisation across subjects}\label{sec:disc-generalisation}
+
+The gap between the LOSO results (Table~\ref{tab:main_results}) and the
+within-subject split results (Table~\ref{tab:split_strategy}) speaks directly to
+how much each model relies on subject-specific gait signatures versus
+generalisable biomechanical structure. Under the within-subject split, the
+training set contains trials from the same individuals as the test set, so the
+model is effectively calibrated to each subject's own gait during training;
+under the LOSO split, by contrast, it must predict these subject-specific
+characteristics for an individual it has never observed.
+
+For the Transformer encoder, mean RMSE was \SI{7.03}{\degree} under the
+within-subject split versus \SI{14.31}{\degree} under LOSO, roughly a twofold
+increase in error. This indicates that the encoder is unable to find a
+generalisable pattern of biomechanical structure that transfers across
+individuals. The TCN baseline exhibits a closely comparable pattern: mean RMSE
+rises from \SI{12.30}{\degree} under the within-subject split to
+\SI{24.50}{\degree} under LOSO, also roughly a twofold increase
+(\num{1.99}$\times$, versus \num{2.03}$\times$ for the Transformer). Because
+the \emph{relative} size of this generalisation gap is essentially identical
+for both architectures, MAE pre-training does not appear to specifically
+reduce the cost of subject-independent generalisation; rather, the fact that a
+model with no pre-training at all (TCN) incurs an equally large relative
+penalty suggests that this generalisation cost is largely intrinsic to the
+task and to the size and inter-subject variability of the dataset, rather
+than to the presence or absence of self-supervised pre-training.
+
+This contrasts with the broader self-supervised learning literature, where
+masked-reconstruction pre-training is typically motivated by improved
+representation transfer under distribution shift \cite{PLACEHOLDER}. % TODO: cite MAE / BERT-style pretraining-for-transfer papers
+[PLACEHOLDER: 1-2 sentences connecting the per-subject RMSE spread in
+Figure~\ref{fig:per_subject_rmse} to specific subjects — e.g.\ does the model
+fail consistently on the same subjects regardless of architecture, suggesting an
+outlier subject (unusual gait, sensor placement, or anthropometry) rather than a
+modelling deficiency?]
+
+\subsection{Sources and distribution of prediction error}\label{sec:disc-error}
+
+Figure~\ref{fig:rmse_over_horizon} and the qualitative traces in
+Figure~\ref{fig:qualitative_examples} indicate where, rather than simply how
+much, the models err. For the Transformer encoder, per-step RMSE does not grow
+monotonically across the forecast horizon: it rises from \SI{8.65}{\degree} at
+the first step to a peak of approximately \SI{16.95}{\degree} around
+\SI{1.0}{\second}--\SI{1.1}{\second} in, then plateaus and declines slightly
+toward the end of the window (Section~\ref{sec:results-horizon}). Error is also
+unevenly distributed across activities (Section~\ref{sec:results-activity}):
+stair ascent is the hardest activity (\SI{17.49}{\degree}), level walking and
+stair descent are intermediate (\SI{15.04}{\degree} and \SI{15.18}{\degree}),
+and ramp ascent/descent are easiest (\SI{11.97}{\degree} and
+\SI{11.91}{\degree}). The residual analysis further shows a mean residual of
+\SI{4.53}{\degree} (prediction minus ground truth), indicating that the
+encoder systematically over-predicts knee angle rather than erring with
+zero-mean noise. [PLACEHOLDER: state whether this systematic over-prediction
+is itself concentrated in particular activities or forecast positions, e.g.\
+by computing the mean (not just RMS) residual per activity and per step.]
+These patterns are consistent with several structural limitations of the
+input signal:
+
+\begin{itemize}
+    \item \textbf{Single-sensor input.} Only a thigh-mounted IMU is used
+    (Section~\ref{sec:Materials}); no shank- or foot-mounted sensor and no EMG
+    signal is available. Knee angle is a function of both thigh and shank
+    kinematics, so the shank's contribution must be inferred indirectly — a task
+    that is likely harder during ballistic swing-phase motion than during the
+    more constrained stance phase.
+    \item \textbf{Calibration is range-only, not kinematic.} The per-subject
+    min-max normalisation (Eq.~\ref{eq:per_subject_minmax}) calibrates signal
+    \emph{amplitude} but provides no subject-specific kinematic calibration
+    (e.g.\ thigh length, joint-centre offset), which may limit how precisely
+    absolute joint angle can be recovered for an unseen subject.
+    \item \textbf{Activity-transition ambiguity.} Near transitions between
+    activity modes, the recent context window spans two different gait
+    patterns, which may be out-of-distribution relative to any single training
+    activity segment.
+    \item \textbf{Sensor noise and placement variability.} Soft-tissue
+    artefact and inter-session strap-placement differences are not explicitly
+    modelled and may contribute high-frequency error independent of the
+    activity being performed.
+\end{itemize}
+
+Stair ascent and level walking — the two highest-error activities — both
+involve more pronounced swing-phase flexion than ramp ascent/descent,
+consistent with the single-sensor-input limitation above: the thigh IMU alone
+may underdetermine shank kinematics most severely during the largest, most
+ballistic flexion movements. Stair ascent additionally involves frequent
+transitions into and out of discrete steps, consistent with the
+activity-transition-ambiguity limitation.
+
+[PLACEHOLDER: 1-2 sentences stating whether the achieved RMSE/MAE
+(Table~\ref{tab:main_results}) is within a range considered clinically or
+functionally acceptable for prosthetic/exoskeleton control. Needs a citation for
+the relevant acceptability threshold — e.g.\ \cite{PLACEHOLDER}.]
+% TODO: find literature threshold for "acceptable" continuous knee angle RMSE in
+% control applications before finalising this claim.
+
+\subsection{Computational considerations for deployment}\label{sec:disc-compute}
+
+The deployment context motivating this work — wearable, embedded control of a
+prosthesis or exoskeleton (Section~\ref{sec:Materials}) — imposes constraints
+on model size and inference latency in addition to accuracy. As shown in
+Table~\ref{tab:compute_comparison} (Section~\ref{sec:results-compute}), TCN is
+both far smaller and roughly \num{17}$\times$ faster than the Transformer
+encoder at batch size 1.
+
+This latency difference has a direct bearing on real-time viability. At a
+sampling rate of \SI{100}{\hertz}, the \num{137}-step forecast horizon spans
+\SI{1.37}{\second} into the future. The Transformer encoder's
+\SI{16.9}{\milli\second} single-sample inference latency exceeds the duration
+of the first two forecast steps (\SI{20}{\milli\second}) combined, meaning
+that by the time a prediction becomes available, its earliest one to two
+predicted samples already correspond to elapsed rather than future time and
+are effectively unusable for control; the remaining \num{135} steps, however,
+still constitute a useable forecast window. Despite this latency cost, the
+Transformer's substantial accuracy advantage over TCN (Table~\ref{tab:main_results})
+means that the loss of the first few forecast samples does not, on its own,
+rule out the encoder's viability for this application.
+
+\subsection{Relation to prior work}\label{sec:disc-related-work}
+
+The use of masked-reconstruction self-supervised pre-training for a
+Transformer-based time series encoder follows the broader trend of adapting
+masked autoencoding \cite{PLACEHOLDER} % TODO: he2022mae or similar MAE citation
+from vision to time series and biomedical signal domains
+\cite{PLACEHOLDER}. % TODO: time-series MAE / PatchTST-style pretraining citation
+[PLACEHOLDER: state whether the observed effect of MAE pre-training on LOSO
+performance (Section~\ref{sec:disc-generalisation}) is consistent with results
+reported in that literature for small-data, high-inter-subject-variance
+biomedical settings, or whether it diverges, and offer a brief hypothesis for
+any divergence — e.g.\ dataset size, masking ratio, or pretraining/fine-tuning
+epoch budget.]
+
+Continuous joint angle estimation from wearable IMUs has been studied with a
+range of architectures, including recurrent networks, TCNs, and more recently
+Transformer variants \cite{PLACEHOLDER}. % TODO: cite prior IMU-to-joint-angle
+% regression papers, ideally including any other ENABL3S-based studies
+[PLACEHOLDER: 2-3 sentences comparing the achieved RMSE/MAE in spirit
+(not exact numbers, since experimental conditions such as sensor count, window
+length, and activity set differ across studies) to representative values
+reported in that literature, and noting where this study's single-thigh-IMU,
+multi-activity, LOSO setting is more or less constrained than prior work.]
+TimesNet's frequency-domain period detection \cite{PLACEHOLDER} and TCN's
+dilated-convolution receptive field \cite{PLACEHOLDER} represent two established
+alternatives to attention-based sequence modelling for this task; [PLACEHOLDER:
+1-2 sentences situating the Transformer encoder's performance relative to these
+architectural families, beyond the direct numeric comparison already given in
+Table~\ref{tab:main_results}].

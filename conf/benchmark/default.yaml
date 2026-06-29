@@ -1,0 +1,5 @@
+batch_sizes: [1, 8, 32, 64]
+num_warmup: 10
+num_iters: 50
+checkpoint_path: null   # null -> falls back to run.checkpoint_path if run.load_checkpoint=true, else random weights
+output_json: true

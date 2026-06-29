@@ -12,30 +12,30 @@ sns.set_context("talk")
 # Custom Transformer = The newly averaged subject metrics
 data = {
     'Locomotor State': [
-        'Walk', 'Walk', 'Walk',
-        'Ramp Up', 'Ramp Up', 'Ramp Up',
-        'Ramp Down', 'Ramp Down', 'Ramp Down',
-        'Stair Up', 'Stair Up', 'Stair Up',
-        'Stair Down', 'Stair Down', 'Stair Down'
+        'Walk', 'Walk',
+        'Ramp Up', 'Ramp Up',
+        'Ramp Down', 'Ramp Down',
+        'Stair Up', 'Stair Up',
+        'Stair Down', 'Stair Down'
     ],
     'Architecture': [
-        'Encoder-LOSO', 'Encoder-Combined', 'Baseline TCN', 
-        'Encoder-LOSO', 'Encoder-Combined', 'Baseline TCN', 
-        'Encoder-LOSO', 'Encoder-Combined', 'Baseline TCN', 
-        'Encoder-LOSO', 'Encoder-Combined', 'Baseline TCN', 
-        'Encoder-LOSO', 'Encoder-Combined', 'Baseline TCN', 
+        'Encoder', 'TCN baseline', 
+        'Encoder', 'TCN baseline', 
+        'Encoder', 'TCN baseline', 
+        'Encoder', 'TCN baseline',
+        'Encoder', 'TCN baseline',
     ],
     'RMSE': [
         # Walk
-        15.04, 7.75, 25.09, 
+        15.04, 25.09, 
         # Ramp Up
-        11.97, 4.93, 22.69,  
+        11.97, 22.69,  
         # Ramp Down
-        11.91, 6.25, 23.47,  
+        11.91, 23.47,  
         # Stair Up
-        17.49, 6.67, 25.03,
+        17.49, 25.03,
         # Stair Down
-        15.18, 7.89, 25.71
+        15.18, 25.71
     ]
 }
 
@@ -50,7 +50,7 @@ ax = sns.barplot(
     x='Locomotor State', 
     y='RMSE', 
     hue='Architecture',
-    palette=['#1f77b4', "#a02c2c", '#7f7f7f'] # Blue for Transformer, Green for Combined, Grey for Baseline
+    palette=["#d72222", "#378de3"] # Blue for Transformer, Green for Combined, Grey for Baseline
 )
 
 # 5. Customize titles and labels

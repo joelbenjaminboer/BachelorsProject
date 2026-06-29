@@ -1,0 +1,136 @@
+% === thesis-writer: Conclusion section (rewritten from Results/Discussion) ===
+% NOTE: cross-references assume labels from results_section_draft.tex
+% (tab:main_results, tab:split_strategy, sec:results-overall, sec:results-activity,
+% sec:results-split) and discussion_section_draft.tex (sec:disc-generalisation,
+% sec:disc-error, sec:disc-compute, sec:disc-related-work).
+
+\section{Conclusion}\label{sec:Conclusion}
+
+\subsection{Summary}\label{sec:conclusion-summary}
+
+This thesis investigated whether self-supervised masked-autoencoder (MAE)
+pre-training improves continuous knee angle prediction from a single
+thigh-mounted IMU, compared against a purely supervised TCN baseline, under a
+Leave-One-Subject-Out (LOSO) evaluation protocol on the ENABL3S dataset.
+
+For the MAE-pretrained Transformer encoder, overall LOSO performance was
+\SI{14.31}{\degree} RMSE and \SI{10.13}{\degree} MAE (fold AB156; the
+\num{10}-fold LOSO mean and standard deviation remain pending —
+Section~\ref{sec:results-overall}). [PLACEHOLDER: state TCN's equivalent LOSO
+RMSE/MAE once available and conclude which model performs better, with what
+margin, and whether the difference was statistically significant
+(Section~\ref{sec:results-overall}).] Error was unevenly distributed: the
+encoder under-performed most on stair ascent (\SI{17.49}{\degree}) and
+performed best on ramp ascent/descent (around \SI{11.9}{\degree};
+Section~\ref{sec:results-activity}), and per-step RMSE rose to a peak around
+one second into the forecast horizon before plateauing rather than growing
+monotonically throughout (Section~\ref{sec:disc-error}).
+
+The within-subject split ablation isolated how much of this performance
+depends on subject-independent generalisation specifically: RMSE roughly
+doubled, from \SI{7.03}{\degree} under within-subject evaluation to
+\SI{14.31}{\degree} under LOSO (Section~\ref{sec:results-split}), indicating
+that a substantial share of the encoder's apparent accuracy comes from
+access to subject-specific calibration trials rather than from biomechanical
+structure that transfers to unseen individuals
+(Section~\ref{sec:disc-generalisation}). [PLACEHOLDER: state whether TCN
+shows a comparable, larger, or smaller relative LOSO/within-subject gap once
+its split-strategy results are available, and what that implies about
+whether MAE pre-training specifically helps or hinders cross-subject
+transfer.]
+
+Beyond the headline accuracy comparison, this work also quantified the
+computational cost of both models on an Apple M-series GPU
+(Section~\ref{sec:disc-compute}): the Transformer encoder
+(\num{4004785} parameters, \SI{16.9}{\milli\second} single-sample inference
+latency) is roughly \num{68}$\times$ larger and \num{17}$\times$ slower than
+TCN (\num{59081} parameters, \SI{1.00}{\milli\second}). Any accuracy gain over
+TCN therefore [PLACEHOLDER: does/does not] come for free in a deployment
+setting where inference latency and model footprint matter, such as embedded
+prosthetic or exoskeleton control — the final judgement depends on the
+still-pending TCN accuracy figures above.
+
+Positioned against prior single- or few-sensor IMU studies on continuous
+joint angle prediction — which report RMSE values mostly in the
+\SI{1}{\degree}--\SI{7}{\degree} range under their respective evaluation
+protocols \citep{wangGaitSeamlessKnee2025, shahGaitSpeedTask2025,
+sung2021prediction, thudor2025knee, huang2026multi} — the within-subject
+result obtained here (\SI{7.03}{\degree}) sits at the upper edge of that
+range, while the LOSO result (\SI{14.31}{\degree}) exceeds it substantially.
+[PLACEHOLDER: confirm whether the cited prior studies use a comparably strict
+subject-independent (LOSO) evaluation, or a within-subject/mixed-subject
+split — if the latter, this would explain most of the gap and should be
+stated explicitly rather than implied.] This suggests that the stricter
+subject-independent generalisation requirement adopted in this thesis, rather
+than the modelling approach itself, is the dominant factor separating these
+results from prior reported performance.
+
+\subsection{Limitations}\label{sec:conclusion-limitations}
+
+Several aspects of the experimental design bound how far these findings can be
+generalised. On the sensing side, only a thigh-mounted IMU is used; no shank,
+foot, or EMG signal is available to disambiguate knee kinematics during swing
+phase (Section~\ref{sec:disc-error}), and the per-subject min-max
+normalisation (Eq.~\ref{eq:per_subject_minmax}) calibrates signal
+\emph{range} but not joint-centre location, segment length, or sensor mounting
+angle. Both are deliberate design choices motivated by a minimally invasive,
+single-sensor deployment scenario, but they bound the achievable accuracy
+regardless of model architecture, and plausibly explain why stair ascent — the
+most ballistic, least standardised activity in the circuit — shows both the
+highest absolute LOSO error and the largest relative generalisation gap
+(Section~\ref{sec:disc-error}).
+
+The evaluation population is similarly constrained. ENABL3S contains only
+\num{10} able-bodied subjects performing a fixed circuit of activities, so
+LOSO with \num{10} folds gives a comparatively noisy estimate of cross-subject
+generalisation, and [PLACEHOLDER: state whether the significance test in
+Section~\ref{sec:results-overall} was pre-registered/powered, or note that
+with only \num{10} folds, statistical power to detect small effect sizes is
+limited]. Critically, the cohort does not include amputees, exoskeleton users,
+or other clinical populations — the actual target users of prosthetic and
+exoskeleton control — who may exhibit substantially different gait patterns
+than the able-bodied subjects studied here.
+
+The self-supervised pre-training setup is also limited in scope: MAE
+pre-training used only the same ENABL3S IMU recordings available for
+fine-tuning, rather than a larger pool of unlabelled IMU data from other
+sources (e.g.\ MotionSense, UCI~HAR). The benefit of self-supervised
+pre-training is typically larger when pre-training data substantially exceeds
+labelled data \cite{PLACEHOLDER}, which was not the case here.
+% TODO: cite MAE/self-supervised scaling literature
+
+Finally, the comparison in this thesis is restricted to the Transformer
+encoder and the TCN baseline; TimesNet, despite being named in the working
+thesis title, was not implemented or evaluated
+(Section~\ref{sec:Method} describes only these two models). This is a scope
+reduction relative to the original plan and should be reflected either by
+revising the title or by explicitly stating this reduction in scope here.
+Separately, the 500\,Hz $\to$ 100\,Hz downsampling step
+(Section~\ref{sec:Materials}) does not apply an explicit anti-aliasing
+low-pass filter before resampling, which may allow high-frequency impact or
+vibration energy to alias into the retained frequency band.
+
+\subsection{Future work}\label{sec:conclusion-future-work}
+
+\begin{itemize}
+
+    \item \textbf{Investigate the stair-ascent generalisation gap directly.}
+    Stair ascent showed the largest LOSO/within-subject performance gap of
+    any activity (Section~\ref{sec:disc-error}); targeted interventions such
+    as stair-specific data augmentation, gait-phase-conditioned modelling, or
+    collecting more stair-ascent strategy variation during training could
+    test whether this gap is addressable rather than intrinsic to a
+    single-thigh-IMU setup.
+
+    \item \textbf{Scale up self-supervised pre-training data.} Pre-train on
+    additional unlabelled IMU corpora beyond ENABL3S (e.g.\ MotionSense,
+    UCI~HAR, or other gait datasets) to test whether MAE pre-training's
+    benefit grows with pre-training data volume, as suggested by the broader
+    self-supervised learning literature \cite{PLACEHOLDER}.
+
+    \item \textbf{On-device deployment study.} Quantify inference latency and
+    energy consumption on an actual embedded microcontroller or low-power SoC
+    representative of prosthetic/exoskeleton hardware, rather than on a
+    desktop-class GPU (MPS), to give a deployment-realistic latency figure
+    that extends the comparison in Section~\ref{sec:disc-compute}.
+\end{itemize}

@@ -1,0 +1,47 @@
+{
+  "model_type": "tcn",
+  "device": "mps",
+  "num_params": 59081,
+  "seq_length": 274,
+  "forecast_horizon": 137,
+  "autocast": true,
+  "checkpoint_path": "/Users/joelboer/VSC/BachelorsProject/checkpoints/pretrain/Model_nopatch/fold_AB156/best_pretrained_epoch_4.pth",
+  "results": [
+    {
+      "batch_size": 1,
+      "mean_ms": 0.9961233398644254,
+      "p50_ms": 1.0021670004789485,
+      "p95_ms": 1.1810420000983868,
+      "min_ms": 0.888332999238628,
+      "max_ms": 1.2367079998512054,
+      "throughput_samples_per_sec": 1003.8917471164788
+    },
+    {
+      "batch_size": 8,
+      "mean_ms": 1.2167041398424772,
+      "p50_ms": 0.9911669985740446,
+      "p95_ms": 1.8981659995915834,
+      "min_ms": 0.9045000006153714,
+      "max_ms": 2.203166999606765,
+      "throughput_samples_per_sec": 6575.139952294183
+    },
+    {
+      "batch_size": 32,
+      "mean_ms": 1.4786491802078672,
+      "p50_ms": 1.4664580012322403,
+      "p95_ms": 1.5793329985172022,
+      "min_ms": 1.4365000006364426,
+      "max_ms": 1.6355419993487885,
+      "throughput_samples_per_sec": 21641.374051620187
+    },
+    {
+      "batch_size": 64,
+      "mean_ms": 3.582647480034211,
+      "p50_ms": 3.2352500002161833,
+      "p95_ms": 5.67600000067614,
+      "min_ms": 3.016333001141902,
+      "max_ms": 9.797624999919208,
+      "throughput_samples_per_sec": 17863.88428017731
+    }
+  ]
+}

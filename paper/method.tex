@@ -1,0 +1,79 @@
+\section{Method}\label{sec:Method}
+
+% === thesis-writer: Method — Encoder / Pretraining / Training ===
+
+\subsection{Encoder}
+
+The core architecture is a Transformer-based encoder that processes multi-channel IMU
+time-series data $\mathbf{X} \in \mathbb{R}^{B \times T \times C}$, where $B$ denotes
+the batch size, $T$ the sequence length, and $C$ the number of input channels.
+
+To reduce sequence length and group temporally local information, the input is first
+\emph{patchified} into non-overlapping segments of size $P$, yielding a representation
+of shape $B \times \lfloor T / P \rfloor \times (P \cdot C)$.  Each patch is then
+projected to the latent space $\mathbb{R}^{d_{\text{model}}}$ via a shared linear layer.
+A learnable auxiliary token $\mathbf{z}_{\text{aux}} \in \mathbb{R}^{d_{\text{model}}}$
+is prepended to the patch sequence, after which fixed sinusoidal positional encodings are
+added to inject temporal order:
+
+\begin{align}
+    \text{PE}_{(p,\,2i)}   &= \sin\!\left(\frac{p}{\,\theta^{2i/d_{\text{model}}}\,}\right), \\
+    \text{PE}_{(p,\,2i+1)} &= \cos\!\left(\frac{p}{\,\theta^{2i/d_{\text{model}}}\,}\right),
+\end{align}
+
+\noindent where $p$ is the patch position, $i$ indexes the embedding dimension, and
+$\theta = 10{,}000$ is the base period \cite{vaswani2017attention}.
+
+The embedded sequence is passed through a stack of $N$ Transformer encoder layers in
+Pre-Layer Normalisation (Pre-LN) order \cite{PLACEHOLDER}, applying layer normalisation
+\emph{before} each Multi-Head Self-Attention (MHSA) and Feed-Forward Network (FFN)
+sub-layer.  The FFN uses a GELU activation with dropout.  A final layer normalisation
+is applied to all output tokens.
+
+\subsection{TCN Baseline}
+As a purely supervised baseline without representation pre-training, a Temporal
+Convolutional Network (TCN) is implemented following the dilated causal convolution
+design of \cite{PLACEHOLDER}. The raw $C$-channel IMU input is first projected to the
+model dimension $d_{\text{model}}$ via a pointwise ($1{\times}1$) convolution, avoiding
+any look-ahead at the projection stage.
+The projected sequence is then passed through a stack of $M$ residual blocks. Each
+block applies a causal dilated convolution with kernel size $k$ and dilation
+$2^{i}$ for block index $i \in \{0, \dots, M-1\}$, left-padding the input by
+$(k-1)\cdot 2^{i}$ timesteps so that the receptive field grows exponentially with
+depth while strictly respecting causality. The convolution output is followed by
+batch normalisation, a ReLU activation, and dropout. A residual connection adds the
+block input back to this output, using a pointwise convolution to match channel
+dimensions whenever the input and output channel counts differ, followed by a final
+ReLU.
+Unlike the Transformer encoder, the TCN baseline is trained end-to-end in a single
+supervised phase and does not support the masked-modelling pre-training objective
+described above, since there is no token-based representation to mask. For
+multi-step forecasting, only the final timestep's $d_{\text{model}}$-dimensional
+feature vector from the last residual block is retained and mapped to the
+$H$-dimensional forecast horizon by a linear regression head, mirroring the
+single fixed-size global readout used by the Transformer encoder.
+
+\subsection{Pre-training}\label{sec:method-pretrain}
+
+To learn kinematic representations without manual annotations, the encoder is
+pre-trained via a masked modelling objective inspired by Masked Autoencoders
+\cite{he2022mae}.  At each training step, a single contiguous block of patch tokens is
+identified by sampling a random start position and block length, and the corresponding
+tokens are replaced with a shared learnable \texttt{mask\_token} $\in
+\mathbb{R}^{d_{\text{model}}}$.  The masked sequence is processed by the encoder, and
+a linear reconstruction head maps each output token corresponding to an input patch back
+to the patch feature space $\mathbb{R}^{P \cdot C}$.  The pre-training loss is the mean squared error
+computed exclusively over the masked positions, encouraging the model to infer missing
+kinematics from temporal context.
+
+\subsection{Fine-tuning}\label{sec:method-finetune}
+
+For the downstream task of joint angle forecasting, the pre-trained encoder is
+fine-tuned with a linear regression head.  The patch-token output embeddings are
+mean-pooled into a fixed-size global summary of the input sequence; this pooled vector
+is passed through a two-layer feed-forward network comprising a linear projection to
+$d_{\text{ff}}$ units, a GELU activation, dropout, and a final linear projection to the
+$H$-dimensional forecast horizon. Training proceeds in two phases: in the first phase
+the encoder weights are frozen and only the regression head is optimised, allowing the
+head to adapt to the downstream task without disturbing the pre-trained representations;
+in the second phase all weights are jointly fine-tuned.
